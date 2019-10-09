@@ -176,9 +176,9 @@ extern int build_ES_unit_from_data(ES_unit_p  *unit,
 extern void free_ES_unit(ES_unit_p  *unit);
 
 /*
- * Print out some information this ES unit, on normal or error output
+ * Print out some information this ES unit, on the given stream
  */
-extern void report_ES_unit(int        is_msg,
+extern void report_ES_unit(FILE      *stream,
                            ES_unit_p  unit);
 
 /*
@@ -335,10 +335,12 @@ extern void free_ES_unit_list(ES_unit_list_p  *list);
 /*
  * Report on an ES unit list's contents.
  *
+ * - `stream` is where to write the information
  * - `name` is the name of the list (used in the header)
  * - `list` is the list to report on
  */
-extern void report_ES_unit_list(char              *name,
+extern void report_ES_unit_list(FILE              *stream,
+                                char              *name,
                                 ES_unit_list_p     list);
 
 /*

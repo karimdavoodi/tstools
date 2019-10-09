@@ -41,23 +41,15 @@
 #include <sys/types.h>
 #include <time.h>        // Sleeping and timing
 
-#ifdef _WIN32
-#include <sys/timeb.h>
-#include <winsock2.h>
-#include <process.h>
-#else  // _WIN32
 #include <unistd.h>
 #include <sys/time.h>    // gettimeofday
 #include <sys/mman.h>    // memory mapping
 #include <sys/wait.h>
 #include <sys/socket.h>  // send
-#endif // _WIN32
 
 #include "compat.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "tswrite_fns.h"
-#include "ts_fns.h"
 
 // ------------------------------------------------------------
 // Global flags affecting debugging
@@ -132,210 +124,6 @@ static int global_child_wait = DEFAULT_CHILD_WAIT;
 #define REPORT_EVERY 10000
 
 
-
-
-// ============================================================
-// CIRCULAR BUFFER
-// ============================================================
-
-// We default to using a "packet" of 7 transport stream packets because 7*188 =
-// 1316, but 8*188 = 1504, and we would like to output as much data as we can
-// that is guaranteed to fit into a single ethernet packet, size 1500.
-#define DEFAULT_TS_PACKETS_IN_ITEM      7
-
-// For simplicity, we'll have a maximum on that (it allows us to have static
-// array sizes in some places). This should be a big enough size to more than
-// fill a jumbo packet on a gigabit network.
-#define MAX_TS_PACKETS_IN_ITEM          100
-
-// ------------------------------------------------------------
-// A circular buffer, usable as a queue
-//
-// We "waste" one buffer item so that we don't have to maintain a count
-// of items in the buffer
-//
-// To get an understanding of how it works, choose a small BUFFER_SIZE
-// (e.g., 11), enable DISPLAY_BUFFER, and select --visual - this will show the
-// reading/writing of the circular buffer in action, including the
-// "unused item".
-//
-// The data for the circular buffer
-// Each circular buffer item "contains" (up to) N TS packets (where N defaults
-// to 7, and is specified as `item_size` in the circular buffer header), and a
-// time (in microseconds) when we would like it to be output (relative to the
-// time for the first packet "sent").
-//
-// Said data is stored at the address indicated by the circular buffer
-// "header", as `item_data`.
-//
-struct circular_buffer_item
-{
-  uint32_t time;              // when we would like this data output
-  int      discontinuity;     // TRUE if our timeline has "broken"
-  int      length;            // number of bytes of data in the array
-};
-typedef struct circular_buffer_item *circular_buffer_item_p;
-
-#define SIZEOF_CIRCULAR_BUFFER_ITEM sizeof(struct circular_buffer_item)
-
-
-
-typedef struct rtp_hdr_info_s
-{
-  uint16_t seq;
-  uint32_t ssrc;
-} rtp_hdr_info_t;
-
-
-// ------------------------------------------------------------
-// The header for the circular buffer
-//
-// Note that `start` is only ever written to by the child process, and this is
-// the only thing that the child process ever changes in the circular buffer.
-//
-// `maxnowait` is the maximum number of packets to send to the target host
-// without forcing an intermediate wait - required to stop us "swamping" the
-// target with too much data, and overrunning its buffers.
-struct circular_buffer
-{
-  volatile int      start;      // start of data "pointer"
-  volatile int      end;        // end of completed data "pointer" (you guessed)
-  volatile int      pending;    // end of buffered but not ready for xmit
-  int      size;       // the actual length of the `item` array
-
-  volatile int eos;    // end of stream
-
-  int      TS_in_item; // max number of TS packets in a circular buffer item
-  int      item_size;  // and thus the size of said item's data array
-  int      hdr_size;
-  tswrite_pkt_hdr_type_t hdr_type;
-  union {
-    rtp_hdr_info_t rtp;
-  } hdr;
-
-  int      maxnowait;  // max number consecutive packets to send with no wait
-  int      waitfor;    // the number of microseconds to wait thereafter
-
-  // The location of the packet data for the circular buffer items
-  byte     *item_data;
-
-  // The "header" data for each circular buffer item
-  struct circular_buffer_item item[];
-};
-typedef struct circular_buffer *circular_buffer_p;
-
-// Note that size doesn't include the final `item`
-#define SIZEOF_CIRCULAR_BUFFER sizeof(struct circular_buffer)
-
-// For PCR2 pacing we accumulate the initial packets here so it must be big
-// enough to cope with a max bitrate stream
-// Say 100Mbits is the fastest we are going to care about
-// So we need to buffer 2 PCRs which have a max spacing of .1s (by the std)
-// and another .1s before that for having just missed a PCR = .2s = 20Mbits
-// = 2.5Mbytes. 2048 * 188 * 7 = 2.7M
-#define DEFAULT_CIRCULAR_BUFFER_SIZE  2048              // used to be 100
-
-#define PRIME_SPEED_NORMAL 100
-
-// ============================================================
-// BUFFERED OUTPUT
-// ============================================================
-
-// Information about each TS packet in our circular buffer item
-struct TS_packet_info
-{
-  int                index;
-  uint32_t           pid;       // do we need the PIDs?
-  int                got_pcr;
-  uint64_t           pcr;
-};
-typedef struct TS_packet_info *TS_packet_info_p;
-#define SIZEOF_TS_PACKET_INFO sizeof(struct TS_packet_info);
-
-// PCR interpolation structure
-typedef struct pcr_pace_env_s
-{
-  uint32_t gap_bytes;
-  uint32_t next_bytes;
-  int32_t next_offset;
-  int next_index;
-  int pcr1_set;  // Seen 1st PCR
-  int gap_set;  // Seen 2nd PCR
-  int pkt1;  // 1st pkt dealt with? (!discontinuity)
-  uint64_t pcr1;
-  uint64_t pcr_base;
-
-  int prime_req;
-  int prime_speed;
-  uint64_t prime_last_pcr;
-
-  uint32_t prev_gap_bytes;
-  uint64_t prev_pcr_gap;
-  uint64_t next_pcr_base;
-} pcr_pace_env;
-
-
-// If we're going to support output via our circular buffer in a manner
-// similar to that for output to a file or socket, then we need a structure
-// to maintain the relevant information. It seems a bit wasteful to burden
-// the circular buffer itself with this, particularly as only the writer
-// cares about this data, so it needn't be shared.
-struct buffered_TS_output
-{
-  circular_buffer_p  buffer;
-  int                which;   // Which buffer index we're writing to
-  int                started; // TRUE if we've started writing therein
-
-  // For each TS packet in the circular buffer, remember its `count`
-  // within the input stream, whether it had a PCR, and if so what that
-  // PCR was. To make it simpler to access these arrays, also keep a fill
-  // index into them (the alternative would be to always re-zero the
-  // `got_pcr` values whenever we start a new circular buffer entry,
-  // which would be a pain...)
-  int                    num_packets;  // how many TS packets we've got
-  struct TS_packet_info  packet[MAX_TS_PACKETS_IN_ITEM];
-
-  // `rate` is the rate (in bytes per second) we would like to output data at
-  uint32_t           rate;
-
-  // `pcr_scale` is a multiplier for PCRs - each PCR found gets its value
-  // multiplied by this
-  double             pcr_scale;
-
-  // `use_pcrs` indicates if we should use PCRs in the data to drive our
-  // timing, rather than use the specified byte rate directly. The `priming`
-  // values are only relevant if `use_pcrs` is true.
-  tswrite_pcr_mode   pcr_mode;
-
-  // 'prime_size' is the amount of space/time to 'prime' the circular buffer
-  // output timing mechanism with. This is effectively multiples of the
-  // size of a circular buffer item.
-  int                prime_size;
-
-  // Percentage "too fast" speedup for our priming rate
-  int                prime_speedup;
-
-  pcr_pace_env       pcr_pace;
-};
-
-#ifdef _WIN32
-// ============================================================
-// Windows specific - gettimeofday replacement
-// ============================================================
-/*
- * Windows does not provide gettimeofday, but it has equivalent functionality,
- * and does provide timeval, so wae can pretend...
- */
-static inline void gettimeofday(struct timeval *tv,
-                                void           *timezone)
-{
-  struct _timeb timebuffer;
-  _ftime(&timebuffer);
-  tv->tv_sec  = (long)timebuffer.time;
-  tv->tv_usec = timebuffer.millitm * 1000;
-}
-#endif
-
 // ============================================================
 // Low level circular buffer support
 // ============================================================
@@ -357,8 +145,7 @@ static int map_circular_buffer(circular_buffer_p  *circular,
                                int                 circ_buf_size,
                                int                 TS_in_packet,
                                int                 maxnowait,
-                               int                 waitfor,
-                               const tswrite_pkt_hdr_type_t hdr_type)
+                               int                 waitfor)
 {
   // Rather than map a file, we'll map anonymous memory
   // BSD supports the MAP_ANON flag as is,
@@ -374,62 +161,30 @@ static int map_circular_buffer(circular_buffer_p  *circular,
   // is not fixed, we can't just allocate it "inside" the buffer items (it
   // wouldn't be nice to allocate the *maximum* possible space we might want!).
   // Instead, we'll put it as a byte array after the rest of our data.
-  //
-  // Space may be left to add an RTP header before each items data
-  //
   // So:
-  const int hdr_size = (hdr_type == PKT_HDR_TYPE_RTP) ? 12 : 0;
   int base_size = SIZEOF_CIRCULAR_BUFFER +
                   (circ_buf_size * SIZEOF_CIRCULAR_BUFFER_ITEM);
-  int data_size = circ_buf_size * (TS_in_packet * TS_PACKET_SIZE + hdr_size);
+  int data_size = circ_buf_size * TS_in_packet * TS_PACKET_SIZE;
   int total_size = base_size + data_size;
-  circular_buffer_p cb;
 
-  *circular = NULL;
-
-#ifdef _WIN32
-  // Under Windows, we're using threading to manage our parent/child
-  // processes, so we can just use malloc here
-  cb = malloc(total_size);
-  if (cb == NULL)
-  {
-    fprint_err("### Error mapping circular buffer as shared memory: %s\n",
-               strerror(errno));
-    return 1;
-  }
-#else // _WIN32
-  cb = mmap(NULL,total_size,
+  *circular = mmap(NULL,total_size,
                    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
 
-  if (cb == MAP_FAILED)
+  if (*circular == MAP_FAILED)
   {
-    fprint_err("### Error mapping circular buffer as shared memory: %s\n",
-               strerror(errno));
+    KLOG("### Error mapping circular buffer as shared memory: %s\n",
+            strerror(errno));
     return 1;
   }
-#endif // _WIN32
 
-  cb->start = 1;
-  cb->end = 0;
-  cb->pending = 0;
-  cb->eos = FALSE;
-  cb->size = circ_buf_size;
-  cb->TS_in_item = TS_in_packet;
-  cb->item_size = TS_in_packet * TS_PACKET_SIZE + hdr_size;
-  cb->hdr_size = hdr_size;
-  cb->hdr_type = hdr_type;
-  if (hdr_type == PKT_HDR_TYPE_RTP)
-  {
-    struct timeval now;
-    gettimeofday(&now, NULL);
-
-    cb->hdr.rtp.seq = 0;
-    cb->hdr.rtp.ssrc = (uint32_t)(now.tv_sec ^ now.tv_usec << 12);  // A somewhat random number
-  }
-  cb->maxnowait = maxnowait;
-  cb->waitfor = waitfor;
-  cb->item_data = (byte *) cb + base_size + hdr_size;
-  *circular = cb;
+  (*circular)->start = 1;
+  (*circular)->end = 0;
+  (*circular)->size = circ_buf_size;
+  (*circular)->TS_in_item = TS_in_packet;
+  (*circular)->item_size = TS_in_packet * TS_PACKET_SIZE;
+  (*circular)->maxnowait = maxnowait;
+  (*circular)->waitfor = waitfor;
+  (*circular)->item_data = (byte *) *circular + base_size;
   return 0;
 }
 
@@ -446,22 +201,17 @@ static int unmap_circular_buffer(circular_buffer_p  circular)
                   (circular->size * SIZEOF_CIRCULAR_BUFFER_ITEM);
   int data_size = circular->size * circular->item_size;
   int total_size = base_size + data_size;
-#ifdef _WIN32
-  // Under Windows, we're using threading to manage our parent/child
-  // processes, so we malloced our circular buffer
-  free(circular);
-#else // _WIN32
   int err = munmap(circular,total_size);
   if (err)
   {
-    fprint_err("### Error unmapping circular buffer from shared memory: %s\n",
-               strerror(errno));
+    KLOG(
+            "### Error unmapping circular buffer from shared memory: %s\n",
+            strerror(errno));
     return 1;
   }
-#endif // _WIN32
   return 0;
 }
-
+
 /*
  * Is the buffer empty?
  */
@@ -475,16 +225,9 @@ static inline int circular_buffer_empty(circular_buffer_p  circular)
  */
 static inline int circular_buffer_full(circular_buffer_p  circular)
 {
-  return ((circular->pending + 2) % circular->size == circular->start);
+  return ((circular->end + 2) % circular->size == circular->start);
 }
-
-// Is the buffer full and never going to empty?
-static inline int circular_buffer_jammed(circular_buffer_p  circular)
-{
-  return ((circular->pending + 1) % circular->size == circular->end);
-}
-
-
+
 /*
  * If the circular buffer is empty, wait until it gains some data.
  *
@@ -493,39 +236,34 @@ static inline int circular_buffer_jammed(circular_buffer_p  circular)
 static inline int wait_if_buffer_empty(circular_buffer_p  circular)
 {
   static int count = 0;
-#ifndef _WIN32
   struct timespec   time = {0,global_child_wait*ONE_MS_AS_NANOSECONDS};
   int    err;
-#endif // _WIN32
 
-  while (circular_buffer_empty(circular) && !circular->eos)
+  while (circular_buffer_empty(circular))
   {
 #if DISPLAY_BUFFER
-    if (global_show_circular && !global_parent_debug) print_msg("<-- wait\n");
+    if (global_show_circular && !global_parent_debug) printf("<-- wait\n");
 #endif
-    if (global_parent_debug) print_msg("<-- wait\n");
+    if (global_parent_debug) printf("<-- wait\n");
     count ++;
 
-#ifdef _WIN32
-    Sleep(global_child_wait);
-#else // _WIN32
     err = nanosleep(&time,NULL);
     if (err == -1 && errno == EINVAL)
     {
-      fprint_err("### Child: bad value (%ld) for wait time\n",time.tv_nsec);
+      KLOG(
+              "### Child: bad value (%ld) for wait time\n",time.tv_nsec);
       return 1;
     }
-#endif // _WIN32
 
     // If we wait for a *very* long time, maybe our parent has crashed
     if (count > CHILD_GIVE_UP_AFTER)
     {
-      print_err("### Child: giving up (parent not responding)\n");
-      return 1;
+      //KLOG("### Child: giving up (parent not responding)\n");
+      //return 1;  KDKD FIXME
     }
   }
   count = 0;
-  return circular_buffer_empty(circular);  // If empty then EOS so return 1
+  return 0;
 }
 
 /*
@@ -536,42 +274,36 @@ static inline int wait_if_buffer_empty(circular_buffer_p  circular)
 static inline int wait_for_buffer_to_fill(circular_buffer_p  circular)
 {
   static int count = 0;
-#ifndef _WIN32
   struct timespec   time = {0,global_child_wait*ONE_MS_AS_NANOSECONDS};
   int    err;
-#endif // _WIN32
 
-  while (!circular_buffer_full(circular) && !circular->eos)
+  while (!circular_buffer_full(circular))
   {
 #if DISPLAY_BUFFER
     if (global_show_circular && !global_child_debug)
-      print_msg("<-- wait for buffer to fill\n");
+      printf("<-- wait for buffer to fill\n");
 #endif
-    if (global_child_debug) print_msg("<-- wait for buffer to fill\n");
+    if (global_child_debug) printf("<-- wait for buffer to fill\n");
     count ++;
 
-#ifdef _WIN32
-    Sleep(global_child_wait);
-#else // _WIN32
     err = nanosleep(&time,NULL);
     if (err == -1 && errno == EINVAL)
     {
-      fprint_err("### Child: bad value (%ld) for wait time\n",time.tv_nsec);
+      KLOG("Child: bad value (%ld) for wait time\n",time.tv_nsec);
       return 1;
     }
-#endif // _WIN32
 
     // If we wait for a *very* long time, maybe our parent has crashed
     if (count > CHILD_GIVE_UP_AFTER)
     {
-      print_err("### Child: giving up (parent not responding)\n");
-      return 1;
+      //KLOG("Child: giving up (parent not responding)\n");
+      //return 1;  KDKD FIXME
     }
   }
   count = 0;
   return 0;
 }
-
+
 /*
  * If the circular buffer is full, wait until it gains some room.
  *
@@ -580,41 +312,29 @@ static inline int wait_for_buffer_to_fill(circular_buffer_p  circular)
 static inline int wait_if_buffer_full(circular_buffer_p  circular)
 {
   static int count = 0;
-#ifndef _WIN32
   struct timespec   time = {0,global_parent_wait*ONE_MS_AS_NANOSECONDS};
   int    err;
-#endif // _WIN32
 
   while (circular_buffer_full(circular))
   {
 #if DISPLAY_BUFFER
-    if (global_show_circular && !global_parent_debug) print_msg("--> wait\n");
+    if (global_show_circular && !global_parent_debug) printf("--> wait\n");
 #endif
-    if (global_parent_debug) print_msg("--> wait\n");
+    if (global_parent_debug) printf("--> wait\n");
     count ++;
 
-#ifdef _WIN32
-    Sleep(global_parent_wait);
-#else // _WIN32
     err = nanosleep(&time,NULL);
     if (err == -1 && errno == EINVAL)
     {
-      fprint_err("### Parent: bad value (%ld) for wait time\n",time.tv_nsec);
-      return 1;
-    }
-#endif // _WIN32
-
-    if (circular_buffer_jammed(circular))
-    {
-      print_err("### Circular buffer jammed: No PCRs found\n");
-      circular->eos = TRUE;
+      KLOG(
+              "### Parent: bad value (%ld) for wait time\n",time.tv_nsec);
       return 1;
     }
 
     // If we wait for a *very* long time, maybe our child has crashed
     if (count > PARENT_GIVE_UP_AFTER)
     {
-      print_err("### Parent: giving up (child not responding)\n");
+      KLOG("### Parent: giving up (child not responding)\n");
       return 1;
     }
   }
@@ -630,38 +350,23 @@ static void print_circular_buffer(char              *prefix,
 {
   int ii;
   if (prefix != NULL)
-    fprint_msg("%s ",prefix);
+    printf("%s ",prefix);
   for (ii = 0; ii < circular->size; ii++)
   {
     byte* offset = circular->item_data + (ii * circular->item_size);
-    fprint_msg("%s",(circular->start == ii ? "[":" "));
+    printf("%s",(circular->start == ii ? "[":" "));
     if (*offset == 0)
-      print_msg("..");
+      printf("..");
     else
-      fprint_msg("%02x",*offset);
-    fprint_msg("%s ",(circular->end == ii ? "]":" "));
+      printf("%02x",*offset);
+    printf("%s ",(circular->end == ii ? "]":" "));
   }
-  print_msg("\n");
+  printf("\n");
 }
 
 // ============================================================
 // Low level buffered TS output support
 // ============================================================
-
-
-
-static void
-reset_pcr_time(pcr_pace_env * const ppe, const uint64_t next_pcr_base)
-{
-  memset(ppe, 0, sizeof(*ppe));
-  ppe->pcr_base = next_pcr_base;
-  ppe->prime_speed = PRIME_SPEED_NORMAL;
-  ppe->prime_last_pcr = INT64_MIN;
-}
-
-
-
-
 /*
  * Build a buffered output context
  *
@@ -690,45 +395,39 @@ static int build_buffered_TS_output(buffered_TS_output_p  *writer,
                                     int                    maxnowait,
                                     int                    waitfor,
                                     int                    rate,
-                                    tswrite_pcr_mode       pcr_mode,
+                                    int                    use_pcrs,
                                     int                    prime_size,
                                     int                    prime_speedup,
-                                    double                 pcr_scale,
-                                    const tswrite_pkt_hdr_type_t   hdr_type)
+                                    double                 pcr_scale)
 {
   int err, ii;
   circular_buffer_p     circular;
-  buffered_TS_output_p  new = calloc(1, SIZEOF_BUFFERED_TS_OUTPUT);
+  buffered_TS_output_p  new = malloc(SIZEOF_BUFFERED_TS_OUTPUT);
   if (new == NULL)
   {
-    print_err("### Unable to allocate buffered output\n");
+    KLOG("### Unable to allocate buffered output\n");
     return 1;
   }
-  reset_pcr_time(&new->pcr_pace, 0);
 
   err = map_circular_buffer(&circular,circ_buf_size,TS_in_packet,
-                            maxnowait,waitfor,hdr_type);
+                            maxnowait,waitfor);
   if (err)
   {
-    print_err("### Error building buffered output\n");
+    KLOG("### Error building buffered output\n");
     free(new);
     return 1;
   }
   new->buffer  = circular;
   new->started = FALSE;
-  new->which   = (circular->pending + 1) % circular->size;
+  new->which   = (circular->end + 1) % circular->size;
   new->num_packets = 0;
 
   new->rate = rate;
-  new->pcr_mode = pcr_mode;
+  new->use_pcrs = use_pcrs;
   new->prime_size = prime_size;
   new->prime_speedup = prime_speedup;
 
   new->pcr_scale = pcr_scale;
-
-  new->pcr_pace.prime_speed = prime_speedup;
-  new->pcr_pace.prime_req = (prime_speedup != PRIME_SPEED_NORMAL);
-  fprint_msg("prime speed set to %d\n", prime_speedup);
 
   // And make sure we're absolutely safe against finding "false" PCR
   // values when we output the first few items...
@@ -754,7 +453,7 @@ static int free_buffered_TS_output(buffered_TS_output_p  *writer)
     int err = unmap_circular_buffer((*writer)->buffer);
     if (err) 
     {
-      print_err("### Error freeing buffered output\n");
+      KLOG("### Error freeing buffered output\n");
       return 1;
     }
   }
@@ -765,17 +464,7 @@ static int free_buffered_TS_output(buffered_TS_output_p  *writer)
   *writer = NULL;
   return 0;
 }
-
-
-// Get a useful unsigned diff between two PCRs allowing for wrap through zero
-#define PCR_WRAP (0x200000000LL * 300LL)
-#define PCR_MS(n) ((int64_t)(n) * 90LL * 300LL)  // 27MHz units
-
-static inline uint64_t pcr_delta_u(const uint64_t a, const uint64_t b)
-{
-  return a < b ? a + PCR_WRAP - b : a - b;
-}
-
+
 // ============================================================
 // Timing
 // ============================================================
@@ -786,7 +475,7 @@ static inline uint64_t pcr_delta_u(const uint64_t a, const uint64_t b)
  *
  * Returns 0 if all goes well, 1 if something goes wrong.
  */
-static int set_buffer_item_time_pcr1(buffered_TS_output_p writer)
+static int set_buffer_item_time_pcr(buffered_TS_output_p writer)
 {
   int  ii;
   circular_buffer_p  circular = writer->buffer;
@@ -836,9 +525,9 @@ static int set_buffer_item_time_pcr1(buffered_TS_output_p writer)
     available_time  = available_bytes * 1000000.0 /
       (pcr_rate * writer->prime_speedup/100.0);
     if (global_parent_debug)
-      fprint_msg("PRIMING: bytes available %6d, time available %8.1f"
-                 " (using rate %.1f x %d%%)\n",
-                 available_bytes,available_time,pcr_rate,writer->prime_speedup);
+      printf("PRIMING: bytes available %6d, time available %8.1f"
+             " (using rate %.1f x %d%%)\n",
+             available_bytes,available_time,pcr_rate,writer->prime_speedup);
 
     if (!had_second_pcr)
     {
@@ -870,16 +559,14 @@ static int set_buffer_item_time_pcr1(buffered_TS_output_p writer)
   available_time -= num_microseconds;
 
   if (global_parent_debug && global_show_all_times)
-    fprint_msg("%06d:     num bytes %6d, time %8.1f, timestamp %8d"
-               " => available bytes %6d, time %8.1f\n",
-               writer->packet[0].index,num_bytes,num_microseconds,timestamp,
-               available_bytes,available_time);
+    printf("%06d:     num bytes %6d, time %8.1f, timestamp %8d"
+           " => available bytes %6d, time %8.1f\n",
+           writer->packet[0].index,num_bytes,num_microseconds,timestamp,
+           available_bytes,available_time);
 
   if (found_pcr)
   {
-    uint64_t delta_pcr = pcr_delta_u(writer->packet[ii].pcr, last_pcr);
-
-    if (delta_pcr > PCR_MS(2000))
+    if (writer->packet[ii].pcr < last_pcr)
     {
       // We've suffered a discontinuity (quite likely because we've looped
       // back to the start of the file). We plainly don't want to continue
@@ -897,12 +584,13 @@ static int set_buffer_item_time_pcr1(buffered_TS_output_p writer)
       // This is our first PCR, so we can't do much with it except remember it
       had_first_pcr = TRUE;
       if (global_parent_debug)
-        fprint_msg("%06d+%d: PCR %10" LLU_FORMAT_STUMP "\n",
-                   writer->packet[0].index,ii,writer->packet[ii].pcr);
+        printf("%06d+%d: PCR %10" LLU_FORMAT_STUMP "\n",
+               writer->packet[0].index,ii,writer->packet[ii].pcr);
     }
     else
     {
       // This is our second or later PCR - we can calculate interesting things
+      uint64_t delta_pcr   = writer->packet[ii].pcr - last_pcr;
       int     delta_bytes = (writer->packet[ii].index-last_pcr_index)*TS_PACKET_SIZE;
       int     extra_bytes;
       double  extra_time;
@@ -919,18 +607,18 @@ static int set_buffer_item_time_pcr1(buffered_TS_output_p writer)
       
       if (global_parent_debug)
       {
-        fprint_msg("%06d+%d: PCR %10" LLU_FORMAT_STUMP
-                   ", rate %9.1f, add %6d/%8.1f  "
-                   " => available bytes %6d, time %8.1f\n",
-                   writer->packet[0].index,ii,writer->packet[ii].pcr,pcr_rate,
-                   extra_bytes,extra_time,
-                   available_bytes,available_time);
-        fprint_msg("      (approximate actual rate %9.1f,"
-                   " mean available bytes %8.1f, time %8.1f)\n",
-                   1000000.0 * delta_bytes /
-                   (timestamp - last_timestamp_near_PCR),
-                   (double)total_available_bytes/num_availables,
-                   total_available_time/num_availables);
+        printf("%06d+%d: PCR %10" LLU_FORMAT_STUMP
+               ", rate %9.1f, add %6d/%8.1f  "
+               " => available bytes %6d, time %8.1f\n",
+               writer->packet[0].index,ii,writer->packet[ii].pcr,pcr_rate,
+               extra_bytes,extra_time,
+               available_bytes,available_time);
+        printf("      (approximate actual rate %9.1f,"
+               " mean available bytes %8.1f, time %8.1f)\n",
+               1000000.0 * delta_bytes /
+               (timestamp - last_timestamp_near_PCR),
+               (double)total_available_bytes/num_availables,
+               total_available_time/num_availables);
       }
       if (!had_second_pcr)  // i.e., *this* is the second PCR
       {
@@ -942,10 +630,10 @@ static int set_buffer_item_time_pcr1(buffered_TS_output_p writer)
         available_time -= initial_prime_time;
         available_time += initial_prime_bytes * 1000000.0 / pcr_rate;
         if (global_parent_debug)
-          fprint_msg("RE-PRIMING: bytes available %6d, time available %8.1f"
-                     " (was %8.1f) (using rate %.1f x %d%%)\n",
-                     available_bytes,available_time,old_time,pcr_rate,
-                     writer->prime_speedup);
+          printf("RE-PRIMING: bytes available %6d, time available %8.1f"
+                 " (was %8.1f) (using rate %.1f x %d%%)\n",
+                 available_bytes,available_time,old_time,pcr_rate,
+                 writer->prime_speedup);
         total_available_bytes = 0;
         total_available_time = 0.0;
         num_availables = 0;
@@ -959,202 +647,8 @@ static int set_buffer_item_time_pcr1(buffered_TS_output_p writer)
   }
 
   last_timestamp = circular->item[writer->which].time = timestamp;
-  return writer->which;
+  return 0;
 }
-
-static inline void
-set_32_be(uint8_t * const p, const uint32_t x)
-{
-  p[0] = x >> 24;
-  p[1] = (x >> 16) & 0xff;
-  p[2] = (x >> 8) & 0xff;
-  p[3] = x & 0xff;
-}
-
-static inline void
-set_16_be(uint8_t * const p, const unsigned int x)
-{
-  p[0] = (x >> 8) & 0xff;
-  p[1] = x & 0xff;
-}
-
-
-// Set times on all packets between where we were and where we are now
-// Sets the time on both the first & last packets
-// Returns the index of the last circ buffer entry modified
-static int
-set_circ_times(const circular_buffer_p circ,
-    const uint32_t index_start, const uint32_t len_bytes,
-    const int32_t pcr1_byte_offset, const uint64_t pcr1,
-    const uint64_t pcr_gap, const uint32_t gap_bytes,
-    const int64_t prime_last_pcr, const int prime_speed,
-    uint64_t * const pNew_pcr_base)
-{
-  int32_t offset = pcr1_byte_offset;
-  const int32_t end_offset = offset + len_bytes;
-  int32_t i = index_start;
-  int idx;
-
-  do
-  {
-    struct circular_buffer_item * const item = circ->item + i;
-    int64_t pcr = (int64_t)pcr1 + (int64_t)offset * (int64_t)pcr_gap / (int64_t)gap_bytes;
-    int64_t adj_pcr = (pcr >= prime_last_pcr) ? pcr :
-      prime_last_pcr - ((prime_last_pcr - pcr) * (int64_t)100) / (int64_t)prime_speed;
-
-    if (circ->hdr_type == PKT_HDR_TYPE_RTP)
-    {
-      uint32_t timestamp = (uint32_t)(pcr / (uint64_t)300);
-      uint8_t * rtp_buf = circ->item_data + i * circ->item_size - 12;
-
-      rtp_buf[0] = 0x80;
-      rtp_buf[1] = 33; // TS
-      set_16_be(rtp_buf + 2, ++circ->hdr.rtp.seq);
-      set_32_be(rtp_buf + 4, timestamp);
-      set_32_be(rtp_buf + 8, circ->hdr.rtp.ssrc);
-    }
-
-    item->time = (uint32_t)(adj_pcr / 27);  // "time" in us
-    offset += item->length;
-    idx = i;
-
-    if (++i >= circ->size)
-      i = 0;
-  } while (offset <= end_offset);
-
-  // Predict PCR at the end of this packet if wanted
-  if (pNew_pcr_base != NULL)
-  {
-    *pNew_pcr_base = (int64_t)pcr1 + (int64_t)offset * (int64_t)pcr_gap / (int64_t)gap_bytes;
-  }
-
-//  fprint_msg("s: %d->%d\n", index_start, idx);
-  return idx;
-}
-
-static int
-finalize_pcr_time(buffered_TS_output_p writer, pcr_pace_env * const ppe)
-{
-  const circular_buffer_p circ = writer->buffer;
-  int idx = -1;
-
-//  fprint_msg("%s\n", __func__);
-
-  if (!ppe->gap_set)
-  {
-    // Can't do anything - forget any pcr we may have had - but
-    // leave accumulated bytes to be output in the prologue of any subsequent
-    // segment
-    ppe->pcr1_set = FALSE;
-  }
-  else
-  {
-    if (ppe->next_bytes != 0)
-    {
-      idx = set_circ_times(circ, ppe->next_index, ppe->next_bytes - 1, ppe->next_offset, ppe->pcr1 + ppe->pcr_base,
-          ppe->prev_pcr_gap, ppe->prev_gap_bytes, ppe->prime_last_pcr, ppe->prime_speed, &ppe->next_pcr_base);
-//      fprint_msg("%s: idx %d->%d\n", __func__, ppe->next_index, idx);
-    }
-
-    reset_pcr_time(ppe, ppe->next_pcr_base);
-  }
-
-  return idx;
-}
-
-static int
-discontinuity_pkt_pcr_time(buffered_TS_output_p writer, pcr_pace_env * const ppe)
-{
-  return finalize_pcr_time(writer, ppe);
-}
-
-static int
-add_pkt_pcr_time(buffered_TS_output_p writer, pcr_pace_env * const ppe)
-{
-  const circular_buffer_p circ = writer->buffer;
-  const circular_buffer_item_p item = circ->item + writer->which;
-  const TS_packet_info_p pkt0 = writer->packet + 0;
-  int idx = -1;
-
-  item->discontinuity = FALSE;
-
-retry:
-  // Mark 1st packet after reset as discontinuity
-  if (!ppe->pkt1)
-  {
-    ppe->pkt1 = TRUE;
-    ppe->next_index = writer->which;
-  }
-
-  // If we have a pcr then we expect it to be on the 1st pkt in this group
-  if (!pkt0->got_pcr)
-  {
-    ppe->gap_bytes += item->length;
-    ppe->next_bytes += item->length;
-
-//    fprint_msg("%u/%u\n", ppe->gap_bytes, ppe->next_bytes);
-  }
-  else
-  {
-    const uint64_t pcr1 = ppe->pcr1;
-    const uint64_t pcr2 = pkt0->pcr;
-
-//    fprint_msg("pcr: %lld\n", pcr2);
-
-    if (!ppe->pcr1_set)
-    {
-      ppe->next_offset = 0 - ppe->next_bytes;
-      ppe->next_bytes += item->length;
-      ppe->pcr_base -= pcr2;
-      // next_index set by discontinuity spotter
-      if (ppe->prime_req)
-      {
-        // ** Really should account for bytes before 1st pcr
-        ppe->prime_last_pcr = 27000000 * 5;
-        ppe->prime_req = FALSE;
-      }
-      ppe->pcr1_set = TRUE;
-    }
-    else
-    {
-      const uint64_t pcr_gap = pcr_delta_u(pcr2, pcr1);
-
-      if (pcr_gap > PCR_MS(2000))
-      {
-        // Discontinuity
-        fprint_msg("PCR2: Discontinuity[%d]: gap=%lld\n", writer->which, pcr_gap);
-
-        idx = finalize_pcr_time(writer, ppe);
-        goto retry;
-      }
-
-      idx = set_circ_times(circ,
-          ppe->next_index, ppe->next_bytes, ppe->next_offset, ppe->pcr_base + pcr1,
-          pcr_gap, ppe->gap_bytes, ppe->prime_last_pcr, ppe->prime_speed, &ppe->next_pcr_base);
-//      fprint_msg("%s: idx %d->%d (%d)\n", __func__, ppe->next_index, idx, writer->which);
-      ppe->next_offset = item->length;
-      ppe->next_bytes = 0;
-      ppe->next_index = writer->which + 1;
-      if (ppe->next_index >= circ->size)
-        ppe->next_index = 0;
-
-      // Remember in case we have to predict the next segment from this one
-      ppe->prev_pcr_gap = pcr_gap;
-      ppe->prev_gap_bytes = ppe->gap_bytes;
-      ppe->gap_set = TRUE;
-
-      // If non-discontinuity wrap then add wrap value to base time
-      if (pcr1 > pcr2)
-        ppe->pcr_base += PCR_WRAP;
-    }
-
-    ppe->pcr1 = pcr2;
-    ppe->gap_bytes = item->length;
-  }
-
-  return idx;
-}
-
 
 /*
  * Set the time indicator for the next circular buffer item, based solely
@@ -1172,7 +666,7 @@ static int set_buffer_item_time_plain(buffered_TS_output_p writer)
   uint32_t elapsed_time = (uint32_t) (num_bytes * 1000000.0 / writer->rate);
   last_time += elapsed_time;
   circular->item[writer->which].time = last_time;
-  return writer->which;
+  return 0;
 }
 
 /*
@@ -1180,23 +674,19 @@ static int set_buffer_item_time_plain(buffered_TS_output_p writer)
  *
  * - `writer` is our buffered output context
  *
- * Returns new idx that can be written or -1 if unchanged
+ * Returns 0 if all goes well, 1 if something goes wrong.
  */
-static int set_buffer_item_time(const buffered_TS_output_p writer, const int finalize)
+static int set_buffer_item_time(buffered_TS_output_p writer)
 {
-  switch (writer->pcr_mode)
+  if (writer->use_pcrs)
   {
-    case TSWRITE_PCR_MODE_PCR2:
-      return finalize ?
-        finalize_pcr_time(writer, &writer->pcr_pace) :
-        add_pkt_pcr_time(writer, &writer->pcr_pace);
-    case TSWRITE_PCR_MODE_PCR1:
-      return set_buffer_item_time_pcr1(writer);
-    case TSWRITE_PCR_MODE_NONE:
-    default:
-      // Allow the user to choose not to look at PCRs, and just do the
-      // calculation based on the rate they've specified
-      return set_buffer_item_time_plain(writer);
+    return set_buffer_item_time_pcr(writer);
+  }
+  else
+  {
+    // Allow the user to choose not to look at PCRs, and just do the
+    // calculation based on the rate they've specified
+    return set_buffer_item_time_plain(writer);
   }
 }
 
@@ -1219,22 +709,23 @@ static int add_eof_entry(buffered_TS_output_p  writer)
   int err = wait_if_buffer_full(circular);
   if (err)
   {
-    print_err("### Internal error - waiting because circular buffer full\n");
+    KLOG(
+            "### Internal error - waiting because circular buffer full\n");
     return 1;
   }
   
   // Work out where we want to write
-  data_pos = (circular->pending + 1) % circular->size;
+  data_pos = (circular->end + 1) % circular->size;
 
 #if DISPLAY_BUFFER
   if (global_show_circular)
-    fprint_msg("Parent: storing buffer %2d (EOF)\n",data_pos);
+    printf("Parent: storing buffer %2d (EOF)\n",data_pos);
 #endif
 
   // Set the `time` within the item appropriately (it doesn't really
   // matter for EOF, since we're not actually going to *write* anything
   // out, but it won't hurt to get it right)
-  set_buffer_item_time(writer, TRUE);
+  set_buffer_item_time(writer);
   
   // And mark EOF by setting the first byte to something that isn't 0x47,
   // and the length to 1.
@@ -1244,7 +735,6 @@ static int add_eof_entry(buffered_TS_output_p  writer)
 #if DISPLAY_BUFFER
   if (global_show_circular) print_circular_buffer("eof",circular);
 #endif
-  circular->eos = TRUE;
   return 0;
 }
 
@@ -1258,48 +748,21 @@ static int add_eof_entry(buffered_TS_output_p  writer)
  *
  * Returns 0 if all went well, 1 if something went wrong.
  */
-static void internal_flush_buffered_TS_output(const buffered_TS_output_p  writer)
+static void internal_flush_buffered_TS_output(buffered_TS_output_p  writer)
 {
-  const circular_buffer_p circular = writer->buffer;
-  int idx;
-
-  if (!writer->started || circular->item[writer->which].length == 0)
-  {
-    // Nothing to do
-    return;
-  }
+  circular_buffer_p circular = writer->buffer;
 
   // Set the `time` within the item appropriately
-  idx = set_buffer_item_time(writer, FALSE);
-  if (idx >= 0)
-    circular->end = idx;
-
+  set_buffer_item_time(writer);
+  
   // Make this item available for reading
-  circular->pending = writer->which;
+  circular->end = writer->which;
 
   // And then prepare for the next index
-  writer->which   = (circular->pending + 1) % circular->size;
+  writer->which   = (circular->end + 1) % circular->size;
   writer->started = FALSE;
   writer->num_packets   = 0;
   writer->packet[0].got_pcr = FALSE;  // Careful or paranoid?
-}
-
-
-static void discontinuity_buffered_TS_output(buffered_TS_output_p  writer)
-{
-  circular_buffer_p circular = writer->buffer;
-  int idx;
-
-  if (writer->pcr_mode != TSWRITE_PCR_MODE_PCR2)
-    return;
-
-  // Set the `time` within the item appropriately
-  idx = discontinuity_pkt_pcr_time(writer, &writer->pcr_pace);
-  if (idx >= 0)
-    circular->end = idx;
-
-  // We need to update the end of the circular buffer but we haven't added
-  // any packets so no need to update any of that
 }
 
 /*
@@ -1315,18 +778,22 @@ static void discontinuity_buffered_TS_output(buffered_TS_output_p  writer)
  */
 static int write_EOF_to_buffered_TS_output(buffered_TS_output_p  writer)
 {
+  circular_buffer_p circular = writer->buffer;
+  int               which    = writer->which;
+  int               length   = circular->item[which].length;
   int  err;
 
   // Make sure anything we were working on beforehand has been output
-  internal_flush_buffered_TS_output(writer);
+  if (writer->started && length > 0)
+    internal_flush_buffered_TS_output(writer);
 
   if (global_parent_debug)
-    print_msg("--> writing EOF\n");
+    printf("--> writing EOF\n");
   
   err = add_eof_entry(writer);
   if (err)
   {
-    print_err("### Error adding EOF indicator\n");
+    KLOG("### Error adding EOF indicator\n");
     return 1;
   }
   return 0;
@@ -1352,21 +819,10 @@ static int write_to_buffered_TS_output(buffered_TS_output_p  writer,
                                        uint64_t              pcr)
 {
   int  err;
-  const circular_buffer_p circular =   writer->buffer;
-  int               which;
-  byte             *data;
-  int              *length;
-
-  // Force PCRs to start a buffer
-  if (writer->pcr_mode == TSWRITE_PCR_MODE_PCR2 && got_pcr)
-  {
-//    fprint_msg("got_pcr: %lld\n", pcr);
-    internal_flush_buffered_TS_output(writer);
-  }
-
-  which    =   writer->which;
-  data     =   circular->item_data + which*circular->item_size;
-  length   = &(circular->item[which].length);
+  circular_buffer_p circular =   writer->buffer;
+  int               which    =   writer->which;
+  byte             *data     =   circular->item_data + which*circular->item_size;
+  int              *length   = &(circular->item[which].length);
 
   // If we haven't yet started writing to the (next) index in the
   // circular buffer, we must check that it is not full
@@ -1375,16 +831,14 @@ static int write_to_buffered_TS_output(buffered_TS_output_p  writer,
     err = wait_if_buffer_full(circular);
     if (err)
     {
-      print_err("### Internal error - waiting because circular buffer full\n");
+      KLOG(
+              "### Internal error - waiting because circular buffer full\n");
       return 1;
     }
     writer->started = TRUE;
     writer->num_packets = 0;
     *length = 0;
-//    fprint_msg("> ");
   }
-
-//  fprint_msg("[%d] @ %d\n", writer->which, *length);
 
   // Copy our data into the circular buffer item, and adjust appropriately
   memcpy(&(data[*length]),packet,TS_PACKET_SIZE);
@@ -1394,8 +848,8 @@ static int write_to_buffered_TS_output(buffered_TS_output_p  writer,
   if (got_pcr)
   {
 #if 0
-    fprint_msg("@@ PCR %10" LLU_FORMAT_STUMP " * %g",pcr,writer->pcr_scale);
-    fprint_msg(" => %10" LLU_FORMAT_STUMP "\n", (uint64_t)(pcr*writer->pcr_scale));
+    printf("@@ PCR %10" LLU_FORMAT_STUMP " * %g",pcr,writer->pcr_scale);
+    printf(" => %10" LLU_FORMAT_STUMP "\n", (uint64_t)(pcr*writer->pcr_scale));
 #endif
     pcr = (uint64_t)((double)pcr * writer->pcr_scale);
   }
@@ -1410,7 +864,7 @@ static int write_to_buffered_TS_output(buffered_TS_output_p  writer,
   writer->num_packets ++;
 
   // Have we filled this entry in the circular buffer?
-  if ((*length) >= circular->item_size - circular->hdr_size)
+  if ((*length) == circular->item_size)
     internal_flush_buffered_TS_output(writer);
   return 0;
 }
@@ -1431,11 +885,6 @@ static int write_to_buffered_TS_output(buffered_TS_output_p  writer,
  */
 static void wait_microseconds(int  microseconds)
 {
-#ifdef _WIN32
-  // Best we can (easily) do is to wait for the nearest (rounded down!)
-  // number of milliseconds - hopefully this will do
-  Sleep(microseconds / 1000);
-#else // _WIN32
   struct  timespec   time = {0};
   struct  timespec   remaining;
   uint32_t nanoseconds = microseconds * 1000;
@@ -1452,7 +901,6 @@ static void wait_microseconds(int  microseconds)
     time = remaining;
     err = nanosleep(&time,&remaining);
   }
-#endif // _WIN32
   return;
 }
 
@@ -1474,7 +922,7 @@ static int write_file_data(TS_writer_p  tswriter,
   written = fwrite(data,1,data_len,tswriter->where.file);
   if (written != data_len)
   {
-    fprint_err("### Error writing out TS packet data: %s\n",strerror(errno));
+    //KLOG("### Error writing out TS packet data: %s\n", strerror(errno));
     return 1;
   }
   return 0;
@@ -1493,15 +941,13 @@ static int write_socket_data(SOCKET output,
                              byte   data[],
                              int    data_len)
 {
-#ifdef _WIN32
-  int      written = 0;
-  int      left    = data_len;
-#else  // _WIN32
   ssize_t  written = 0;
   ssize_t  left    = data_len;
-#endif // _WIN32
   int     start   = 0;
-
+	if(data[0] != 0x47){
+		KLOG("TS Packet error\n");
+		return 0;
+	}
   // (When writing to a file, we don't expect to ever write less than
   // the requested number of bytes. However, if `output` is a socket,
   // it is possible that the underlying buffering might cause a
@@ -1510,40 +956,20 @@ static int write_socket_data(SOCKET output,
   while (left > 0)
   {
     written = send(output,&(data[start]),left,0);
-#ifdef _WIN32
-    if (written == SOCKET_ERROR)
-    {
-      int err = WSAGetLastError();
-      if (err == WSAENOBUFS)
-      {
-        print_err("!!! Warning: 'no buffer space available' writing out"
-                  " TS packet data - retrying\n");
-      }
-      else
-      {
-        print_err("### Error writing out TS packet data:");
-        print_winsock_err(err);
-        print_err("\n");
-        return 1;
-      }
-    }
-#else // _WIN32
     if (written == -1)
     {
       if (errno == ENOBUFS)
       {
-        print_err("!!! Warning: 'no buffer space available' writing out"
-                  " TS packet data - retrying\n");
+        KLOG("!!! Warning: 'no buffer space available' writing out"
+                " TS packet data - retrying\n");
         errno = 0;
       }
       else
       {
-        fprint_err("### Error writing out TS packet data: %s\n",
-                   strerror(errno));
+        //KLOG("### Error writing out TS packet data: %s\n", strerror(errno));
         return 1;
       }
     }
-#endif // _WIN32
     left -= written;
     start += written;
   }
@@ -1566,50 +992,31 @@ static int read_command(SOCKET    command_socket,
                         int      *command_changed)
 {
   byte    thing;
-#ifdef _WIN32
-  int     length = recv(command_socket,&thing,1,0);
-#else  
   ssize_t length = read(command_socket,&thing,1);
-#endif
   if (length == 0)
   {
-    print_err("!!! EOF reading from command socket\n");
+    KLOG(
+            "!!! EOF reading from command socket\n");
     *command = COMMAND_QUIT;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[EOF -> quit]]\n");
+    printf("[[EOF -> quit]]\n");
 #endif
     return 0;
     //return EOF;
   }
-#ifdef _WIN32
-  else if (length == SOCKET_ERROR)
-  {
-    int err = WSAGetLastError();
-    print_err("!!! Error reading from command socket:");
-    print_winsock_err(err);
-    print_err("\n");
-    *command = COMMAND_QUIT;
-    *command_changed = TRUE;
-#if DEBUG_COMMANDS
-    print_msg("[[Error -> quit]]\n");
-#endif
-    return 0;
-    //return 1;
-  }
-#else
   else if (length == -1)
   {
-    fprint_err("!!! Error reading from command socket: %s\n",strerror(errno));
+    KLOG(
+            "!!! Error reading from command socket: %s\n",strerror(errno));
     *command = COMMAND_QUIT;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[Error -> quit]]\n");
+    printf("[[Error -> quit]]\n");
 #endif
     return 0;
     //return 1;
   }
-#endif
 
   switch (thing)
   {
@@ -1617,7 +1024,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_QUIT;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[quit]]\n");
+    printf("[[quit]]\n");
 #endif
     break;
 
@@ -1625,7 +1032,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_NORMAL;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[normal]]\n");
+    printf("[[normal]]\n");
 #endif
     break;
 
@@ -1633,7 +1040,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_PAUSE;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[pause]]\n");
+    printf("[[pause]]\n");
 #endif
     break;
 
@@ -1641,7 +1048,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_FAST;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[fast-forward]]\n");
+    printf("[[fast-forward]]\n");
 #endif
     break;
 
@@ -1649,7 +1056,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_FAST_FAST;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[fast-fast-forward]]\n");
+    printf("[[fast-fast-forward]]\n");
 #endif
     break;
 
@@ -1657,7 +1064,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_REVERSE;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[reverse]]\n");
+    printf("[[reverse]]\n");
 #endif
     break;
 
@@ -1665,7 +1072,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_FAST_REVERSE;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[fast-reverse]]\n");
+    printf("[[fast-reverse]]\n");
 #endif
     break;
 
@@ -1673,7 +1080,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SKIP_FORWARD;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[skip-forward]]\n");
+    printf("[[skip-forward]]\n");
 #endif
     break;
 
@@ -1681,7 +1088,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SKIP_BACKWARD;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[skip-backward]]\n");
+    printf("[[skip-backward]]\n");
 #endif
     break;
 
@@ -1689,7 +1096,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SKIP_FORWARD_LOTS;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[big-skip-forward]]\n");
+    printf("[[big-skip-forward]]\n");
 #endif
     break;
 
@@ -1697,7 +1104,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SKIP_BACKWARD_LOTS;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[big-skip-backward]]\n");
+    printf("[[big-skip-backward]]\n");
 #endif
     break;
 
@@ -1705,7 +1112,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SELECT_FILE_0;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[select-file-0]]\n");
+    printf("[[select-file-0]]\n");
 #endif
     break;
 
@@ -1713,7 +1120,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SELECT_FILE_1;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[select-file-1]]\n");
+    printf("[[select-file-1]]\n");
 #endif
     break;
 
@@ -1721,7 +1128,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SELECT_FILE_2;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[select-file-2]]\n");
+    printf("[[select-file-2]]\n");
 #endif
     break;
 
@@ -1729,7 +1136,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SELECT_FILE_3;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[select-file-3]]\n");
+    printf("[[select-file-3]]\n");
 #endif
     break;
 
@@ -1737,7 +1144,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SELECT_FILE_4;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[select-file-4]]\n");
+    printf("[[select-file-4]]\n");
 #endif
     break;
 
@@ -1745,7 +1152,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SELECT_FILE_5;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[select-file-5]]\n");
+    printf("[[select-file-5]]\n");
 #endif
     break;
 
@@ -1753,7 +1160,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SELECT_FILE_6;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[select-file-6]]\n");
+    printf("[[select-file-6]]\n");
 #endif
     break;
 
@@ -1761,7 +1168,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SELECT_FILE_7;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[select-file-7]]\n");
+    printf("[[select-file-7]]\n");
 #endif
     break;
 
@@ -1769,7 +1176,7 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SELECT_FILE_8;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[select-file-8]]\n");
+    printf("[[select-file-8]]\n");
 #endif
     break;
 
@@ -1777,19 +1184,19 @@ static int read_command(SOCKET    command_socket,
     *command = COMMAND_SELECT_FILE_9;
     *command_changed = TRUE;
 #if DEBUG_COMMANDS
-    print_msg("[[select-file-9]]\n");
+    printf("[[select-file-9]]\n");
 #endif
     break;
     
   case '\n':  // Newline is needed to send commands to us
 #if DEBUG_COMMANDS
-    print_msg("[[newline/ignored]]\n");
+    printf("[[newline/ignored]]\n");
 #endif
     break;    // so ignore it silently
 
   default:
 #if DEBUG_COMMANDS
-    fprint_msg("[[%c ignored]]\n",(isprint(thing)?thing:'?'));
+    printf("[[%c ignored]]\n",(isprint(thing)?thing:'?'));
 #endif
     break;
   }
@@ -1856,7 +1263,7 @@ static int write_tcp_data(TS_writer_p  tswriter,
       result = select(num_to_check,&read_fds,&write_fds,NULL,NULL);
       if (result == -1)
       {
-        fprint_err("### Error in select: %s\n",strerror(errno));
+        KLOG("### Error in select: %s\n",strerror(errno));
         return 1;
       }
       else if (result == 0) // Hmm - wouldn't expect this
@@ -1885,16 +1292,16 @@ static int write_tcp_data(TS_writer_p  tswriter,
       if (not_written)
       {
         waiting = TRUE;
-        fprint_msg(".. still waiting to write data (last command '%c', %s)..\n",
-                   (isprint(tswriter->command)?tswriter->command:'?'),
-                   (tswriter->command_changed?"changed":"unchanged"));
+        printf(".. still waiting to write data (last command '%c', %s)..\n",
+               (isprint(tswriter->command)?tswriter->command:'?'),
+               (tswriter->command_changed?"changed":"unchanged"));
       }
       else if (waiting)
       {
         waiting = FALSE;
-        fprint_msg(".. data written (last command '%c', %s)..\n",
-                   (isprint(tswriter->command)?tswriter->command:'?'),
-                   (tswriter->command_changed?"changed":"unchanged"));
+        printf(".. data written (last command '%c', %s)..\n",
+               (isprint(tswriter->command)?tswriter->command:'?'),
+               (tswriter->command_changed?"changed":"unchanged"));
       }
 #endif
     }
@@ -1913,8 +1320,8 @@ extern int wait_for_command(TS_writer_p  tswriter)
 {
   if (tswriter->command_socket == -1)
   {
-    print_err("### Cannot wait for new command when command input"
-              " is not enabled\n");
+    KLOG("### Cannot wait for new command when command input"
+            " is not enabled\n");
     return 1;
   }
   else
@@ -1932,7 +1339,7 @@ extern int wait_for_command(TS_writer_p  tswriter)
       result = select(num_to_check,&read_fds,NULL,NULL,NULL);
       if (result == -1)
       {
-        fprint_err("### Error in select: %s\n",strerror(errno));
+        KLOG("### Error in select: %s\n",strerror(errno));
         return 1;
       }
       else if (result == 0) // Hmm - wouldn't expect this
@@ -1957,20 +1364,19 @@ extern int wait_for_command(TS_writer_p  tswriter)
  *
  * Returns 0 if all went well, 1 if something went wrong.
  */
-static int write_circular_data(const SOCKET             output,
-                               const circular_buffer_p  circular)
+static int write_circular_data(SOCKET             output,
+                               circular_buffer_p  circular)
 {
   int     err;
-  byte   *buffer  = circular->item_data + circular->start*circular->item_size - circular->hdr_size;
-  int     length  = circular->item[circular->start].length + circular->hdr_size;
+  byte   *buffer  = circular->item_data + circular->start*circular->item_size;
+  int     length  = circular->item[circular->start].length;
 #if DISPLAY_BUFFER
-  int  oldend = circular->pending;
+  int  oldend = circular->end;
   int  oldstart = circular->start;
   int  newend,newstart;
 #endif
 
   err = write_socket_data(output,buffer,length);
-
   if (err)
   {
     // If we're writing out over UDP, it's possible our write fails for
@@ -1985,19 +1391,19 @@ static int write_circular_data(const SOCKET             output,
 #if DISPLAY_BUFFER
   if (global_show_circular)
   {
-    newend = circular->pending;
+    newend = circular->end;
     newstart = circular->start;
     if (oldend != newend || oldstart != newstart)
     {
-      fprint_msg("get [%2d,%2d] became [%2d,%2d]",
-                 oldend,oldstart,newend,newstart);
+      printf("get [%2d,%2d] became [%2d,%2d]",
+             oldend,oldstart,newend,newstart);
       if (oldstart != newstart)
-        print_msg(" (!!)");
+        printf(" (!!)");
       if (newstart == (newend + 1) % circular->size)
-        print_msg(" ->empty");
+        printf(" ->empty");
       if ((newend + 2) % circular->size == newstart)
-        print_msg(" ->full");
-      print_msg("\n");
+        printf(" ->full");
+      printf("\n");
     }
   }
 #endif
@@ -2034,12 +1440,12 @@ static int received_EOF(circular_buffer_p  circular)
 #if DISPLAY_BUFFER
     if (global_show_circular)
     {
-      print_msg("Child: found EOF\n");
+      printf("Child: found EOF\n");
       print_circular_buffer("<--",circular);
     }
 #else
   if (child_parent_debug)
-    print_msg("<-- found EOF\n");
+    printf("<-- found EOF\n");
 #endif
     return TRUE;
   }
@@ -2059,8 +1465,8 @@ static int32_t perturb_time_by(void)
   if (first_time)
   {
     if (global_perturb_verbose)
-      fprint_msg("... perturb seed %ld, range %u\n",
-                 (long)global_perturb_seed,(unsigned)global_perturb_range);
+      printf("... perturb seed %ld, range %u\n",
+             (long)global_perturb_seed,(unsigned)global_perturb_range);
     srand(global_perturb_seed);
     first_time = FALSE;
   }
@@ -2077,7 +1483,7 @@ static int32_t perturb_time_by(void)
   result -= global_perturb_range;
 
   if (global_perturb_verbose)
-    fprint_msg("... perturb %ldms\n",(long)result);
+    printf("... perturb %ldms\n",(long)result);
 
   return result * 1000;
 }
@@ -2144,15 +1550,15 @@ static int write_from_circular(SOCKET             output,
     // If we're starting up for the first time, it's probably worth waiting
     // for the circular buffer to fill up
     if (!quiet)
-      print_msg("Circular buffer filling...\n");
+      printf("Circular buffer filling...\n");
     err = wait_for_buffer_to_fill(circular);
     if (err)
     {
-      print_err("### Error - waiting for circular buffer to fill\n");
+      KLOG("Error - waiting for circular buffer to fill\n");
       return 1;
     }
     if (!quiet)
-      print_msg("Circular buffer filled - starting to send data\n");
+      printf("Circular buffer filled - starting to send data\n");
     starting = FALSE;
   }
   else
@@ -2162,7 +1568,8 @@ static int write_from_circular(SOCKET             output,
     err = wait_if_buffer_empty(circular);
     if (err)
     {
-      print_err("### Error - waiting because circular buffer is empty\n");
+      KLOG(
+              "### Error - waiting because circular buffer is empty\n");
       return 1;
     }
   }
@@ -2197,8 +1604,6 @@ static int write_from_circular(SOCKET             output,
   // has told us that the timeline has changed radically
   if (reset || circular->item[circular->start].discontinuity)
   {
-//    fprint_msg("%s: Discontinuity[%d]: reset=%d, pkt_time=%u\n", __func__, circular->start, reset, this_packet_time);
-
     // We believe out timeline has gone askew - start a new one
     // Set up "now" as our base time, and output our packet right away
     start = now;
@@ -2206,8 +1611,8 @@ static int write_from_circular(SOCKET             output,
     delta_start =  this_packet_time;
     waitfor = 0;
     if (global_child_debug)
-      fprint_msg("<-- packet %6u, gap %6u; STARTING delta %6d ",
-                 this_packet_time,packet_time_gap,delta_start);
+      printf("<-- packet %6u, gap %6u; STARTING delta %6d ",
+             this_packet_time,packet_time_gap,delta_start);
     reset = FALSE;
   }
   else
@@ -2219,25 +1624,19 @@ static int write_from_circular(SOCKET             output,
     waitfor = this_packet_time - adjusted_now;
 
     if (global_child_debug)
-      fprint_msg("<-- packet %6u, gap %6u; our time %6u = %6u -> wait %6d ",
-                 this_packet_time,packet_time_gap,our_time_now,adjusted_now,
-                 waitfor);
+      printf("<-- packet %6u, gap %6u; our time %6u = %6u -> wait %6d ",
+             this_packet_time,packet_time_gap,our_time_now,adjusted_now,
+             waitfor);
   }
 
   // So how long *should* we wait for the correct time to write?
   if (waitfor > 0)
   {
-    if (waitfor > 200000)
-    {
-      fprint_msg("###[%d] (%d) >0.2s, RESET\n", circular->start, waitfor);
-      reset = TRUE;
-      waitfor = 200000;
-    }
-    if (global_child_debug) print_msg("(waiting");
+    if (global_child_debug) printf("(waiting");
   }
   else if (waitfor > -200000) // less than 0.2 seconds gap - "small", so ignore
   {
-    if (global_child_debug) print_msg("(<0.2s, ignore");
+    if (global_child_debug) printf("(<0.2s, ignore");
     waitfor = 0;
   }
   else // more than 0.2 seconds - makes us reset our idea of time
@@ -2245,7 +1644,7 @@ static int write_from_circular(SOCKET             output,
     if (global_perturb_range == 0) // but only if we're not mucking about with time
     {
       if (global_child_debug)
-        print_msg("(>0.2s, RESET");
+        printf("(>0.2s, RESET");
       else
       {
         // Let the user know we're having some problems.
@@ -2253,13 +1652,11 @@ static int write_from_circular(SOCKET             output,
         // process logs progress in terms of the number of TS packets
         // output - (count-1)*7+1 should be the index of the first packet
         // in our circular buffer item, which is a decent approximation
-        fprint_err("!!! [%d] Packet %d (item %d): Outputting %.2fs late -"
-                   " restarting time sequence: time=%u\n",
-            circular->start,
-                   (count-1)*7+1,count,-(double)waitfor/1000000, this_packet_time);
-        if (circular->maxnowait >= 0)
-          fprint_err("    Maybe consider running with -maxnowait greater"
-                     " than %d\n",circular->maxnowait);
+        //KLOG("!!! Packet %d (item %d): Outputting %.2fs late -"
+        //        " restarting time sequence\n",
+        //        (count-1)*7+1,count,-(double)waitfor/1000000);
+        //if (circular->maxnowait >= 0)
+        //  KLOG("Maybe consider running with -maxnowait greater than %d\n",circular->maxnowait);
       }
       // Ask for a reset, and output the packet right away
       reset = TRUE;
@@ -2274,17 +1671,17 @@ static int write_from_circular(SOCKET             output,
     if (sent_without_delay < circular->maxnowait)
     {
       sent_without_delay ++;
-      if (global_child_debug) fprint_msg(", %d)\n",sent_without_delay);
+      if (global_child_debug) printf(", %d)\n",sent_without_delay);
     }
     else
     {
-      if (global_child_debug) fprint_msg(", %d -> wait)\n",
-                                         sent_without_delay+1);
+      if (global_child_debug) printf(", %d -> wait)\n",
+                               sent_without_delay+1);
       waitfor = circular->waitfor; // enforce a minimal wait
     }
   }
   else
-    if (global_child_debug) print_msg(")\n");
+    if (global_child_debug) printf(")\n");
 
   // So, finally, do we need to wait before writing?
   if (waitfor > 0)
@@ -2292,7 +1689,7 @@ static int write_from_circular(SOCKET             output,
     wait_microseconds(waitfor);
     sent_without_delay = 0;
   }
-
+  
   // Write it...
   err = write_circular_data(output,circular);
   if (err) return 1;
@@ -2338,53 +1735,6 @@ static int tswrite_child_process(TS_writer_p  tswriter)
   }
   return 0;
 }
-#ifdef _WIN32
-// ============================================================
-// Windows threading ("fork" alternative)
-// ============================================================
-/*
- * Wrapper for tswrite_child_process, used to coerce args, etc.
- */
-static void child_thread_fn(void_p arg)
-{
-  TS_writer_p  tswriter = (TS_writer_p)arg;
-  (void) tswrite_child_process(tswriter);
-
-#ifdef _WIN32
-  {
-    int err;
-    // On Windows, only the "child" knows when it has finished using its
-    // resources (i.e., the circular buffer and output socket), so only the
-    // "child" can sensibly release them...
-    err = disconnect_socket(tswriter->where.socket);
-    if (err == EOF)
-      fprint_err("### Error closing output: %s\n",strerror(errno));
-
-    // And free the buffering stuff
-    err = free_buffered_TS_output(&(tswriter->writer));
-    if (err)
-      print_err("### Error freeing TS buffer\n");
-
-    free(tswriter);
-  }
-#endif
-}
-
-/*
- * Start up the child thread, to handle the circular buffering
- */
-static int start_child(TS_writer_p  tswriter)
-{
-  tswriter->child = (HANDLE) _beginthread(child_thread_fn,0,(void_p)tswriter);
-
-  if (tswriter->child == (HANDLE) -1)
-  {
-    fprint_err("Error creating child process: %s\n",strerror(errno));
-    return 1;
-  }
-  return 0;
-}
-#else  // _WIN32
 // ============================================================
 // Unix forking ("thread" alternative)
 // ============================================================
@@ -2400,7 +1750,7 @@ static int start_child(TS_writer_p  tswriter)
   pid = fork();
   if (pid == -1)
   {
-    fprint_err("Error forking: %s\n",strerror(errno));
+    KLOG("Error forking: %s\n",strerror(errno));
     return 1;
   }
   else if (pid == 0)
@@ -2422,22 +1772,21 @@ static int wait_for_child_to_exit(TS_writer_p  tswriter,
 {
   int    err;
   pid_t  result;
-  if (!quiet) print_msg("Waiting for child to finish writing and exit\n");
+  if (!quiet) printf("Waiting for child to finish writing and exit\n");
   result = waitpid(tswriter->child,&err,0);
   if (result == -1)
   {
-    fprint_err("### Error waiting for child to exit: %s\n",
-               strerror(errno));
+    KLOG("### Error waiting for child to exit: %s\n",
+            strerror(errno));
     return 1;
   }
   if (WIFEXITED(err))
   {
-    if (!quiet) print_msg("Child exited normally\n");
+    if (!quiet) printf("Child exited normally\n");
   }
   tswriter->child = 0;
   return 0;
 }
-#endif // _WIN32
 
 // ============================================================
 // Writing
@@ -2456,7 +1805,8 @@ static int tswrite_build(TS_WRITER_TYPE  how,
   new = malloc(SIZEOF_TS_WRITER);
   if (new == NULL)
   {
-    print_err("### Unable to allocate space for TS_writer datastructure\n");
+    KLOG(
+            "### Unable to allocate space for TS_writer datastructure\n");
     return 1;
   }
   new->how = how;
@@ -2524,29 +1874,29 @@ extern int tswrite_open(TS_WRITER_TYPE  how,
   switch (how)
   {
   case TS_W_STDOUT:
-    if (!quiet) print_msg("Writing to <stdout>\n");
+    if (!quiet) printf("Writing to <stdout>\n");
     new->where.file = stdout;
     break;
   case TS_W_FILE:
-    if (!quiet) fprint_msg("Writing to file %s\n",name);
+    if (!quiet) printf("Writing to file %s\n",name);
     new->where.file = fopen(name,"wb");
     if (new->where.file == NULL)
     {
-      fprint_err("### Unable to open output file %s: %s\n",
-                 name,strerror(errno));
+      KLOG("### Unable to open output file %s: %s\n",
+              name,strerror(errno));
       return 1;
     }
     break;
   case TS_W_TCP:
-    if (!quiet) fprint_msg("Connecting to %s via TCP/IP on port %d\n",
-                           name,port);
+    if (!quiet) printf("Connecting to %s via TCP/IP on port %d\n",
+                       name,port);
     new->where.socket = connect_socket(name,port,TRUE, NULL);
     if (new->where.socket == -1)
     {
-      fprint_err("### Unable to connect to %s\n",name);
+      KLOG("### Unable to connect to %s\n",name);
       return 1;
     }
-    if (!quiet) fprint_msg("Writing    to %s via TCP/IP\n",name);
+    if (!quiet) printf("Writing    to %s via TCP/IP\n",name);
    break;
   case TS_W_UDP:
     if (!quiet)
@@ -2555,21 +1905,21 @@ extern int tswrite_open(TS_WRITER_TYPE  how,
       // but we'll assume the user only specifies `multicast_if` is it is, for
       // the purposes of these messages (amending `connect_socket`, which does
       // know, to output this message iff `!quiet` is a bit overkill)
-      fprint_msg("Connecting to %s via UDP on port %d",name,port);
+      printf("Connecting to %s via UDP on port %d",name,port);
       if (multicast_if)
-        fprint_msg(" (multicast interface %s)",multicast_if);
-      print_msg("\n");
+        printf(" (multicast interface %s)",multicast_if);
+      printf("\n");
     }
     new->where.socket = connect_socket(name,port,FALSE,multicast_if);
     if (new->where.socket == -1)
     {
-      fprint_err("### Unable to connect to %s\n",name);
+      KLOG("### Unable to connect to %s\n",name);
       return 1;
     }
-    if (!quiet) fprint_msg("Writing    to %s via UDP\n",name);
+    if (!quiet) printf("Writing    to %s via UDP\n",name);
     break;
   default:
-    fprint_err("### Unexpected writer type %d to tswrite_open()\n",how);
+    KLOG("### Unexpected writer type %d to tswrite_open()\n",how);
     free(new);
     return 1;
   }
@@ -2656,11 +2006,11 @@ extern int tswrite_wait_for_client(int           server_socket,
   {
 #ifdef _WIN32
     err = WSAGetLastError();
-    print_err("### Error listening for client: ");
+    KLOG("### Error listening for client: ");
     print_winsock_err(err);
-    print_err("\n");
+    KLOG("\n");
 #else  // _WIN32      
-    fprint_err("### Error listening for client: %s\n",strerror(errno));
+    KLOG("### Error listening for client: %s\n",strerror(errno));
 #endif // _WIN32
     return 1;
   }
@@ -2671,11 +2021,11 @@ extern int tswrite_wait_for_client(int           server_socket,
   {
 #ifdef _WIN32
     err = WSAGetLastError();
-    print_err("### Error accepting connection: ");
+    KLOG("### Error accepting connection: ");
     print_winsock_err(err);
-    print_err("\n");
+    KLOG("\n");
 #else  // _WIN32      
-    fprint_err("### Error accepting connection: %s\n",strerror(errno));
+    KLOG("### Error accepting connection: %s\n",strerror(errno));
 #endif // _WIN32
     return 1;
   }
@@ -2722,28 +2072,26 @@ extern int tswrite_start_buffering(TS_writer_p  tswriter,
                                    int          maxnowait,
                                    int          waitfor,
                                    int          byterate,
-                                   tswrite_pcr_mode pcr_mode,
+                                   int          use_pcrs,
                                    int          prime_size,
                                    int          prime_speedup,
-                                   double       pcr_scale,
-                                   const tswrite_pkt_hdr_type_t hdr_type)
+                                   double       pcr_scale)
 {
   int   err;
 
   if (tswriter->how != TS_W_UDP)
   {
-    fprint_err("### Buffered output not supported for %s output\n",
-               (tswriter->how == TS_W_TCP?"TCP/IP":
-                tswriter->how == TS_W_FILE?"file":
-                tswriter->how == TS_W_STDOUT?"<standard output>":"???"));
+    KLOG("### Buffered output not supported for %s output\n",
+            (tswriter->how == TS_W_TCP?"TCP/IP":
+             tswriter->how == TS_W_FILE?"file":
+             tswriter->how == TS_W_STDOUT?"<standard output>":"???"));
     return 1;
   }
   
   err = build_buffered_TS_output(&(tswriter->writer),
                                  circ_buf_size,TS_in_packet,
-                                 maxnowait,waitfor,byterate,pcr_mode,
-                                 prime_size,prime_speedup,pcr_scale,
-	                             hdr_type);
+                                 maxnowait,waitfor,byterate,use_pcrs,
+                                 prime_size,prime_speedup,pcr_scale);
   if (err) return 1;
 
   err = start_child(tswriter);
@@ -2776,11 +2124,11 @@ extern int tswrite_start_buffering_from_context(TS_writer_p  tswriter,
                                  context->maxnowait,
                                  context->waitfor,
                                  context->byterate,
-                                 context->pcr_mode,
+                                 context->use_pcrs,
                                  context->prime_size,
                                  context->prime_speedup,
-                                 context->pcr_scale,
-                                 context->pkt_hdr_type);
+                                 context->pcr_scale);
+
 }
 
 /*
@@ -2825,7 +2173,7 @@ extern int tswrite_start_input(TS_writer_p  tswriter,
 
   if (tswriter->how != TS_W_TCP)
   {
-    print_err("### Command input is only supported for TCP/IP\n");
+    KLOG("### Command input is only supported for TCP/IP\n");
     return 1;
   }
 
@@ -2835,24 +2183,24 @@ extern int tswrite_start_input(TS_writer_p  tswriter,
   if (err == SOCKET_ERROR)
   {
     err = WSAGetLastError();
-    print_err("### Unable to set socket nonblocking: ");
+    KLOG("### Unable to set socket nonblocking: ");
     print_winsock_err(err);
-    print_err("\n");
+    KLOG("\n");
     return 1;
   }
 #else  // _WIN32  
   flags = fcntl(tswriter->where.socket,F_GETFL,0);
   if (flags == -1)
   {
-    fprint_err("### Error getting flags for output socket: %s\n",
-               strerror(errno));
+    KLOG("### Error getting flags for output socket: %s\n",
+            strerror(errno));
     return 1;
   }
   err = fcntl(tswriter->where.socket,F_SETFL,flags | O_NONBLOCK);
   if (err == -1)
   {
-    fprint_err("### Error setting output socket non-blocking: %s\n",
-               strerror(errno));
+    KLOG("### Error setting output socket non-blocking: %s\n",
+            strerror(errno));
     return 1;
   }
 #endif  // _WIN32
@@ -2924,7 +2272,7 @@ static int tswrite_close_child(TS_writer_p  tswriter,
     err = write_EOF_to_buffered_TS_output(tswriter->writer);
     if (err)
     {
-      print_err("### Error adding EOF indicator to TS buffer\n");
+      KLOG("### Error adding EOF indicator to TS buffer\n");
       (void) free_buffered_TS_output(&tswriter->writer);
       return 1;
     }
@@ -2949,7 +2297,7 @@ static int tswrite_close_child(TS_writer_p  tswriter,
     err = free_buffered_TS_output(&(tswriter->writer));
     if (err)
     {
-      print_err("### Error freeing TS buffer\n");
+      KLOG("### Error freeing TS buffer\n");
       return 1;
     }
   }
@@ -2977,7 +2325,7 @@ static int tswrite_close_file(TS_writer_p  tswriter)
     err = fclose(tswriter->where.file);
     if (err == EOF)
     {
-      fprint_err("### Error closing output: %s\n",strerror(errno));
+      KLOG("### Error closing output: %s\n",strerror(errno));
       return 1;
     }
     break;
@@ -2986,13 +2334,13 @@ static int tswrite_close_file(TS_writer_p  tswriter)
     err = disconnect_socket(tswriter->where.socket);
     if (err == EOF)
     {
-      fprint_err("### Error closing output: %s\n",strerror(errno));
+      KLOG("### Error closing output: %s\n",strerror(errno));
       return 1;
     }
     break;
   default:
-    fprint_err("### Unexpected writer type %d to tswrite_close()\n",
-               tswriter->how);
+    KLOG("### Unexpected writer type %d to tswrite_close()\n",
+            tswriter->how);
     return 1;
   }
   return 0;
@@ -3023,7 +2371,7 @@ extern int tswrite_close(TS_writer_p  tswriter,
   err = tswrite_close_child(tswriter,quiet);
   if (err)
   {
-    print_err("### Error closing child process\n");
+    KLOG("### Error closing child process\n");
 #ifdef _WIN32
     if (!tswriter->writer)
     {
@@ -3053,13 +2401,13 @@ extern int tswrite_close(TS_writer_p  tswriter,
     err = tswrite_close_file(tswriter);
     if (err)
     {
-      print_err("### Error closing output\n");
+      KLOG("### Error closing output\n");
       free(tswriter);
       return 1;
     }
   
     if (!quiet)
-      fprint_msg("Output %d TS packets\n",tswriter->count);
+      printf("Output %d TS packets\n",tswriter->count);
 
     free(tswriter);
 #ifdef _WIN32
@@ -3100,7 +2448,7 @@ extern int tswrite_write(TS_writer_p  tswriter,
     if (drop_count > 0)  // we're busy ignoring packets
     {
 #if 0
-      print_msg("x");
+      printf("x");
 #endif
       drop_count --;
       return 0;
@@ -3108,15 +2456,15 @@ extern int tswrite_write(TS_writer_p  tswriter,
     else if (packet_count < tswriter->drop_packets)
     {
 #if 0
-      if (packet_count == 0) print_msg("\n");
-      print_msg(".");
+      if (packet_count == 0) printf("\n");
+      printf(".");
 #endif
       packet_count ++;
     }
     else
     {
 #if 0
-      print_msg("X");
+      printf("X");
 #endif
       packet_count = 0;
       drop_count = tswriter->drop_number - 1;
@@ -3143,8 +2491,8 @@ extern int tswrite_write(TS_writer_p  tswriter,
       if (err) return 1;
       break;
     default:
-      fprint_err("### Unexpected writer type %d to tswrite_write()\n",
-                 tswriter->how);
+      KLOG("### Unexpected writer type %d to tswrite_write()\n",
+              tswriter->how);
       return 1;
     }
     (tswriter->count)++;
@@ -3159,23 +2507,6 @@ extern int tswrite_write(TS_writer_p  tswriter,
   }
   return 0;
 }
-
-/*
- * Discontinuity on the stream being written (e.g. file looping)
- * If we are pacing the output then this resets the timing info
-*/
-
-int tswrite_discontinuity(const TS_writer_p  tswriter)
-{
-  if (tswriter->writer == NULL)
-    return 0;
-
-  internal_flush_buffered_TS_output(tswriter->writer);
-
-  discontinuity_buffered_TS_output(tswriter->writer);
-
-  return 0;
-}
 
 // ============================================================
 // Common option handling - helpers for utility writers
@@ -3184,9 +2515,9 @@ int tswrite_discontinuity(const TS_writer_p  tswriter)
  * Write a usage string (to standard output) describing the tuning
  * options processed by tswrite_process_args.
  */
-extern void tswrite_help_tuning(void)
+extern void tswrite_help_tuning()
 {
-  fprint_msg(
+  printf(
     "Output Tuning:\n"
     "  -bitrate <n>      Try for an initial data rate of <n> bits/second,\n"
     "                    so -bitrate 3000 is 3000 bits/second, i.e., 3kbps\n"
@@ -3205,7 +2536,7 @@ extern void tswrite_help_tuning(void)
     "  -maxnowait <n>    Specify the maximum number of packets that can be\n"
     "                    sent to the target host with no gap. Sending too\n"
     "                    many packets with no gap can overrun the target's\n"
-    "                    buffers. [default: off]\n"
+    "                    buffers. The default is 3.\n"
     "  -maxnowait off    Do not enforce any limit on how many packets may be\n"
     "                    sent without any intermediate delay.\n"
     "\n"
@@ -3279,9 +2610,9 @@ extern void tswrite_help_tuning(void)
  * Write a usage string (to standard output) describing the testing
  * options processed by tswrite_process_args.
  */
-extern void tswrite_help_testing(void)
+extern void tswrite_help_testing()
 {
-  print_msg(
+  printf(
     "Testing:\n"
     "In order to support some form of automatic 'jitter' in the output,\n"
     "the child process's idea of time can be randomly perturbed:\n"
@@ -3302,9 +2633,9 @@ extern void tswrite_help_testing(void)
  * Write a usage string (to standard output) describing the
  * debugging options processed by tswrite_process_args.
  */
-extern void tswrite_help_debug(void)
+extern void tswrite_help_debug()
 {
-  print_msg(
+  printf(
     "Debugging:\n"
     "  -pdebug           Output debugging messages for the parent process\n"
     "  -pdebug2          Output debugging messages for the parent process\n"
@@ -3326,59 +2657,59 @@ extern void tswrite_help_debug(void)
  */
 extern void tswrite_report_args(TS_context_p  context)
 {
-  fprint_msg("Circular buffer size %d (+1)\n",context->circ_buf_size);
-  fprint_msg("Transmitting %s%d TS packet%s (%d bytes) per network"
-             " packet/circular buffer item\n",
-             context->TS_in_item==1?"":"(up to) ",
-             context->TS_in_item,
-             context->TS_in_item==1?"":"s",
-             context->TS_in_item*TS_PACKET_SIZE);
-
+  printf("Circular buffer size %d (+1)\n",context->circ_buf_size);
+  printf("Transmitting %s%d TS packet%s (%d bytes) per network"
+         " packet/circular buffer item\n",
+         context->TS_in_item==1?"":"(up to) ",
+         context->TS_in_item,
+         context->TS_in_item==1?"":"s",
+         context->TS_in_item*TS_PACKET_SIZE);
+  
   if (context->bitrate % 1000000 == 0)
-    fprint_msg("Requested data rate is %d Mbps ",context->bitrate/1000000);
+    printf("Requested data rate is %d Mbps ",context->bitrate/1000000);
   else if (context->bitrate % 1000 == 0)
-    fprint_msg("Requested data rate is %d kbps ",context->bitrate/1000);
+    printf("Requested data rate is %d kbps ",context->bitrate/1000);
   else
-    fprint_msg("Requested data rate is %d bps ",context->bitrate);
-  fprint_msg("(%d bytes/second)\n",context->byterate);
+    printf("Requested data rate is %d bps ",context->bitrate);
+  printf("(%d bytes/second)\n",context->byterate);
   
   if (context->maxnowait == -1)
-    print_msg("Maximum number of packets to send with no wait: No limit\n");
+    printf("Maximum number of packets to send with no wait: No limit\n");
   else
   {
-    fprint_msg("Maximum number of packets to send with no wait: %d\n",
-               context->maxnowait);
-    fprint_msg("Number of microseconds to wait thereafter: %d\n",
-               context->waitfor);
+    printf("Maximum number of packets to send with no wait: %d\n",
+           context->maxnowait);
+    printf("Number of microseconds to wait thereafter: %d\n",
+           context->waitfor);
   }
   
-  if (context->pcr_mode != TSWRITE_PCR_MODE_NONE)
+  if (context->use_pcrs)
   {
-    fprint_msg("PCR mechanism 'primed' with time for %d circular buffer items\n",
-               context->prime_size);
+    printf("PCR mechanism 'primed' with time for %d circular buffer items\n",
+           context->prime_size);
     if (context->prime_speedup != 100)
-      fprint_msg("PCR mechanism 'prime speedup' is %d%%\n",
-                 context->prime_speedup);
+      printf("PCR mechanism 'prime speedup' is %d%%\n",
+             context->prime_speedup);
   }
   else
-    print_msg("Using requested data rate directly to time packets"
-              " (ignoring any PCRs)\n");
+    printf("Using requested data rate directly to time packets"
+           " (ignoring any PCRs)\n");
 
   if (context->pcr_scale)
-    fprint_msg("Multiply PCRs by %g\n",context->pcr_scale);
+    printf("Multiply PCRs by %g\n",context->pcr_scale);
 
   if (global_parent_wait != DEFAULT_PARENT_WAIT)
-    fprint_msg("Parent will wait %dms for buffer to unfill\n",
-               global_parent_wait);
+    printf("Parent will wait %dms for buffer to unfill\n",
+           global_parent_wait);
   if (global_child_wait != DEFAULT_CHILD_WAIT)
-    fprint_msg("Child will wait %dms for buffer to unempty\n",
-               global_child_wait);
+    printf("Child will wait %dms for buffer to unempty\n",
+           global_child_wait);
 
   if (global_perturb_range)
   {
-    fprint_msg("Randomly perturbing child time by -%u..%ums"
-               " with seed %u\n",global_perturb_range,global_perturb_range,
-               global_perturb_seed);
+    printf("Randomly perturbing child time by -%u..%ums"
+           " with seed %u\n",global_perturb_range,global_perturb_range,
+           global_perturb_seed);
   }
 }
 
@@ -3416,21 +2747,20 @@ extern int tswrite_process_args(char           *prefix,
 
   context->circ_buf_size = DEFAULT_CIRCULAR_BUFFER_SIZE;
   context->TS_in_item    = DEFAULT_TS_PACKETS_IN_ITEM;
-  context->maxnowait     = -1;
+  context->maxnowait     = 30;
   context->waitfor       = 1000;
   context->byterate      = DEFAULT_BYTE_RATE;
   context->bitrate       = context->byterate * 8;
-  context->pcr_mode      = TSWRITE_PCR_MODE_PCR2;
+  context->use_pcrs      = TRUE;
   context->prime_size    = DEFAULT_PRIME_SIZE;
   context->prime_speedup = 100;
   context->pcr_scale     = 1.0;
-  context->pkt_hdr_type  = PKT_HDR_TYPE_NONE;
 
   while (ii < argc)
   {
     if (!strcmp("-nopcrs",argv[ii]))
     {
-      context->pcr_mode = TSWRITE_PCR_MODE_NONE;
+      context->use_pcrs = FALSE;
       argv[ii] = TSWRITE_PROCESSED;
     }
     else if (!strcmp("-bitrate",argv[ii]))
@@ -3461,7 +2791,7 @@ extern int tswrite_process_args(char           *prefix,
       if (err) return 1;
       if (context->prime_size < 1)
       {
-        fprint_err("### %s: -prime 0 does not make sense\n",prefix);
+        KLOG("### %s: -prime 0 does not make sense\n",prefix);
         return 1;
       }
       argv[ii] = argv[ii+1] = TSWRITE_PROCESSED;
@@ -3475,7 +2805,7 @@ extern int tswrite_process_args(char           *prefix,
       if (err) return 1;
       if (context->prime_speedup < 1)
       {
-        fprint_err("### %s: -speedup 0 does not make sense\n",prefix);
+        KLOG("### %s: -speedup 0 does not make sense\n",prefix);
         return 1;
       }
       argv[ii] = argv[ii+1] = TSWRITE_PROCESSED;
@@ -3490,7 +2820,7 @@ extern int tswrite_process_args(char           *prefix,
       argv[ii] = argv[ii+1] = TSWRITE_PROCESSED;
       ii++;
       context->pcr_scale = percentage / 100.0;
-      fprint_msg("PCR accelerator = %g%% = PCR * %g\n",percentage,context->pcr_scale);
+      printf("PCR accelerator = %g%% = PCR * %g\n",percentage,context->pcr_scale);
     }
     else if (!strcmp("-maxnowait",argv[ii]))
     {
@@ -3523,7 +2853,7 @@ extern int tswrite_process_args(char           *prefix,
       if (err) return 1;
       if (context->circ_buf_size < 1)
       {
-        fprint_err("### %s: -buffer 0 does not make sense\n",prefix);
+        KLOG("### %s: -buffer 0 does not make sense\n",prefix);
         return 1;
       }
       argv[ii] = argv[ii+1] = TSWRITE_PROCESSED;
@@ -3537,24 +2867,19 @@ extern int tswrite_process_args(char           *prefix,
       if (err) return 1;
       if (context->TS_in_item < 1)
       {
-        fprint_err("### %s: -tsinpkt 0 does not make sense\n",prefix);
+        KLOG("### %s: -tsinpkt 0 does not make sense\n",prefix);
         return 1;
       }
       else if (context->TS_in_item > MAX_TS_PACKETS_IN_ITEM)
       {
-        fprint_err("### %s: -tsinpkt %d is too many (maximum is %d)\n",
-                   prefix,context->TS_in_item,MAX_TS_PACKETS_IN_ITEM);
+        KLOG("### %s: -tsinpkt %d is too many (maximum is %d)\n",
+                prefix,context->TS_in_item,MAX_TS_PACKETS_IN_ITEM);
         return 1;
       }
       argv[ii] = argv[ii+1] = TSWRITE_PROCESSED;
       ii++;
     }
-    else if (!strcmp("-rtp", argv[ii]))
-    {
-      context->pkt_hdr_type = PKT_HDR_TYPE_RTP;
-      argv[ii] = TSWRITE_PROCESSED;
-    }
-    else if (!strcmp("-hd", argv[ii]))
+    else if (!strcmp("-hd",argv[ii]))
     {
       context->maxnowait = 40;
       context->bitrate   = 20000000;
@@ -3587,13 +2912,13 @@ extern int tswrite_process_args(char           *prefix,
       if (err) return 1;
       if (temp == 0)
       {
-        fprint_err("### %s: -pwait 0 does not make sense\n",prefix);
+        KLOG("### %s: -pwait 0 does not make sense\n",prefix);
         return 1;
       }
       if (temp > 999)
       {
-        fprint_err("### %s: -pwait %d (more than 999) not allowed\n",
-                   prefix,temp);
+        KLOG("### %s: -pwait %d (more than 999) not allowed\n",
+                prefix,temp);
         return 1;
       }
       global_parent_wait = temp;
@@ -3608,13 +2933,13 @@ extern int tswrite_process_args(char           *prefix,
       if (err) return 1;
       if (temp == 0)
       {
-        fprint_err("### %s: -cwait 0 does not make sense\n",prefix);
+        KLOG("### %s: -cwait 0 does not make sense\n",prefix);
         return 1;
       }
       if (temp > 999)
       {
-        fprint_err("### %s: -cwait %d (more than 999) not allowed\n",
-                   prefix,temp);
+        KLOG("### %s: -cwait %d (more than 999) not allowed\n",
+                prefix,temp);
         return 1;
       }
       global_child_wait = temp;
@@ -3626,8 +2951,8 @@ extern int tswrite_process_args(char           *prefix,
       int temp;
       if (ii+3 >= argc)
       {
-        fprint_err("### %s: -perturb should have three arguments: "
-                   "<seed> <range> <verbose>\n",prefix);
+        KLOG("### %s: -perturb should have three arguments: "
+                "<seed> <range> <verbose>\n",prefix);
         return 1;
       }
       err = int_value(prefix,argv[ii],argv[ii+1],TRUE,10,&temp);
@@ -3637,14 +2962,14 @@ extern int tswrite_process_args(char           *prefix,
       if (err) return 1;
       if (temp == 0)
       {
-        fprint_err("### %s: a range of 0 for -perturb does not make sense\n",prefix);
+        KLOG("### %s: a range of 0 for -perturb does not make sense\n",prefix);
         return 1;
       }
       global_perturb_range = temp;
       if (strlen(argv[ii+3]) != 1)
       {
-        fprint_err("### %s: the <verbose> flag for -perturb must be 0 or 1,"
-                   " not '%s'\n",prefix,argv[ii+3]);
+        KLOG("### %s: the <verbose> flag for -perturb must be 0 or 1,"
+                " not '%s'\n",prefix,argv[ii+3]);
         return 1;
       }
       switch (argv[ii+3][0])
@@ -3656,8 +2981,8 @@ extern int tswrite_process_args(char           *prefix,
         global_perturb_verbose = TRUE;
         break;
       default:
-        fprint_err("### %s: the <verbose> flag for -perturb must be 0 or 1,"
-                   "not '%c'\n",prefix,argv[ii+3][0]);
+        KLOG("### %s: the <verbose> flag for -perturb must be 0 or 1,"
+                "not '%c'\n",prefix,argv[ii+3][0]);
         return 1;
       }
       argv[ii] = argv[ii+1] = argv[ii+2] = argv[ii+3] = TSWRITE_PROCESSED;

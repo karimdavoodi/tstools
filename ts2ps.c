@@ -42,7 +42,6 @@
 #include "ps_fns.h"
 #include "ts_fns.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "pidint_fns.h"
 #include "pes_fns.h"
 #include "version.h"
@@ -59,7 +58,7 @@ static int write_program_end_code(FILE  *output)
   size_t count = fwrite(program_end_code,4,1,output);
   if (count != 1)
   {
-    print_err("### Error writing PS program end code\n");
+    KLOG("### Error writing PS program end code\n");
     return 1;
   }
   return 0;
@@ -84,7 +83,7 @@ static int write_pack_header(FILE  *output)
   count = fwrite(pack_header,sizeof(pack_header),1,output);
   if (count != 1)
   {
-    print_err("### Error writing PS pack header out to file\n");
+    KLOG("### Error writing PS pack header out to file\n");
     return 1;
   }
   return 0;
@@ -114,14 +113,14 @@ static int write_PES_packet(FILE    *output,
   count = fwrite(header,sizeof(header),1,output);
   if (count != 1)
   {
-    print_err("### Error writing PS PES packet header out to file\n");
+    KLOG("### Error writing PS PES packet header out to file\n");
     return 1;
   }
 
   count = fwrite(data,data_len,1,output);
   if (count != 1)
   {
-    print_err("### Error writing PS PES packet data out to file\n");
+    KLOG("### Error writing PS PES packet data out to file\n");
     return 1;
   }
   return 0;
@@ -145,7 +144,7 @@ static int extract_data(int      input,
   err = build_PES_reader(input,TRUE,!quiet,!quiet,program_number,&reader);
   if (err)
   {
-    print_err("### Error building PES reader over input file\n");
+    KLOG("### Error building PES reader over input file\n");
     return 1;
   }
 
@@ -158,14 +157,14 @@ static int extract_data(int      input,
       break;
     else if (err)
     {
-      print_err("### Error reading next PES packet\n");
+      KLOG("### Error reading next PES packet\n");
       (void) free_PES_reader(&reader);
       return 1;
     }
     err = write_pack_header(output);
     if (err)
     {
-      print_err("### Error writing PS pack header\n");
+      KLOG("### Error writing PS pack header\n");
       (void) free_PES_reader(&reader);
       return 1;
     }
@@ -186,18 +185,18 @@ static int extract_data(int      input,
 #define MAX_LENGTH 0xFFFF
       if (PES_packet_length > MAX_LENGTH)
       {
-        fprint_err("PES packet of 'zero' length is really %6d - too long for one packet\n",
-                   PES_packet_length);
+        printf("PES packet of 'zero' length is really %6d - too long for one packet\n",
+               PES_packet_length);
         // Output what we can of the original packet
         reader->packet->data[4] = (MAX_LENGTH & 0xFF00) >> 8;
         reader->packet->data[5] = (MAX_LENGTH & 0x00FF);
         // Remember that we also write out the 6 bytes preceding those
         // MAX_LENGTH bytes...
-        fprint_err(".. writing out %5d (%5d total)\n",MAX_LENGTH,MAX_LENGTH+6);
+        printf(".. writing out %5d (%5d total)\n",MAX_LENGTH,MAX_LENGTH+6);
         count = fwrite(reader->packet->data,MAX_LENGTH+6,1,output);
         if (count != 1)
         {
-          print_err("### Error writing (start of) PES packet out to file\n");
+          KLOG("### Error writing (start of) PES packet out to file\n");
           (void) free_PES_reader(&reader);
           return 1;
         }
@@ -214,12 +213,12 @@ static int extract_data(int      input,
           // we can write is three less than the (otherwise) maximum.
           int this_length = min(MAX_LENGTH-3,PES_packet_length);
           int err;
-          fprint_err(".. writing out %5d\n",this_length);
+          printf(".. writing out %5d\n",this_length);
           err = write_PES_packet(output,start,this_length,
                                  reader->packet->data[3]);
           if (err)
           {
-            print_err("### Error writing (part of) PES packet out to file\n");
+            KLOG("### Error writing (part of) PES packet out to file\n");
             (void) free_PES_reader(&reader);
             return 1;
           }
@@ -229,16 +228,16 @@ static int extract_data(int      input,
       }
       else
       {
-        fprint_err("PES packet of 'zero' length, adjusting to %6d-6=%6d"
-                   " (stream id %02x, 'length' %d)\n",
-                   reader->packet->data_len,PES_packet_length,
-                   reader->packet->data[3],reader->packet->length);
+        printf("PES packet of 'zero' length, adjusting to %6d-6=%6d"
+               " (stream id %02x, 'length' %d)\n",
+               reader->packet->data_len,PES_packet_length,
+               reader->packet->data[3],reader->packet->length);
         reader->packet->data[4] = (PES_packet_length & 0xFF00) >> 8;
         reader->packet->data[5] = (PES_packet_length & 0x00FF);
         count = fwrite(reader->packet->data,reader->packet->data_len,1,output);
         if (count != 1)
         {
-          print_err("### Error writing PES packet out to file\n");
+          KLOG("### Error writing PES packet out to file\n");
           (void) free_PES_reader(&reader);
           return 1;
         }
@@ -249,7 +248,7 @@ static int extract_data(int      input,
       count = fwrite(reader->packet->data,reader->packet->data_len,1,output);
       if (count != 1)
       {
-        print_err("### Error writing PES packet out to file\n");
+        KLOG("### Error writing PES packet out to file\n");
         (void) free_PES_reader(&reader);
         return 1;
       }
@@ -269,12 +268,12 @@ static int extract_data(int      input,
 
 static void print_usage()
 {
-  print_msg(
+  printf(
     "Usage: ts2ps [switches] [<infile>] [<outfile>]\n"
     "\n"
     );
   REPORT_VERSION("ts2ps");
-  print_msg(
+  printf(
     "\n"
     "  Extract a single program stream from a Transport Stream.\n"
     "\n"
@@ -286,11 +285,9 @@ static void print_usage()
     "  <outfile> is an H.222 Program Stream file (but see -stdout)\n"
     "\n"
     "General switches:\n"
-    "  -err stdout        Write error messages to standard output (the default)\n"
-    "  -err stderr        Write error messages to standard error (Unix traditional)\n"
     "  -stdin             Input from standard input, instead of a file\n"
     "  -stdout            Output to standard output, instead of a file\n"
-    "                     Forces -quiet and -err stderr.\n"
+    "                     Forces -quiet.\n"
     "  -verbose, -v       Output informational/diagnostic messages\n"
     "  -quiet, -q         Only output error messages\n"
     "  -max <n>, -m <n>   Maximum number of TS packets to read\n"
@@ -370,28 +367,11 @@ int main(int argc, char **argv)
       {
         use_stdout = TRUE;
         had_output_name = TRUE;  // so to speak
-        redirect_output_stderr();
-      }
-      else if (!strcmp("-err",argv[ii]))
-      {
-        CHECKARG("ts2ps",ii);
-        if (!strcmp(argv[ii+1],"stderr"))
-          redirect_output_stderr();
-        else if (!strcmp(argv[ii+1],"stdout"))
-          redirect_output_stdout();
-        else
-        {
-          fprint_err("### ts2ps: "
-                     "Unrecognised option '%s' to -err (not 'stdout' or"
-                     " 'stderr')\n",argv[ii+1]);
-          return 1;
-        }
-        ii++;
       }
       else
       {
-        fprint_err("### ts2ps: "
-                   "Unrecognised command line switch '%s'\n",argv[ii]);
+        KLOG("### ts2ps: "
+                "Unrecognised command line switch '%s'\n",argv[ii]);
         return 1;
       }
     }
@@ -399,7 +379,7 @@ int main(int argc, char **argv)
     {
       if (had_input_name && had_output_name)
       {
-        fprint_err("### ts2ps: Unexpected '%s'\n",argv[ii]);
+        KLOG("### ts2ps: Unexpected '%s'\n",argv[ii]);
         return 1;
       }
       else if (had_input_name)  // shouldn't do this if had -stdout
@@ -418,13 +398,13 @@ int main(int argc, char **argv)
 
   if (!had_input_name)
   {
-    print_err("### ts2ps: No input file specified\n");
+    KLOG("### ts2ps: No input file specified\n");
     return 1;
   }
 
   if (!had_output_name)
   {
-    print_err("### ts2ps: No output file specified\n");
+    KLOG("### ts2ps: No output file specified\n");
     return 1;
   }
   
@@ -442,12 +422,12 @@ int main(int argc, char **argv)
     input = open_binary_file(input_name,FALSE);
     if (input == -1)
     {
-      fprint_err("### ts2ps: Unable to open input file %s\n",input_name);
+      KLOG("### ts2ps: Unable to open input file %s\n",input_name);
       return 1;
     }
   }
   if (!quiet)
-    fprint_msg("Reading from %s\n",(use_stdin?"<stdin>":input_name));
+    printf("Reading from %s\n",(use_stdin?"<stdin>":input_name));
 
   if (had_output_name)
   {
@@ -459,23 +439,23 @@ int main(int argc, char **argv)
       if (output == NULL)
       {
         if (!use_stdin) (void) close_file(input);
-        fprint_err("### ts2ps: "
-                   "Unable to open output file %s: %s\n",output_name,
-                   strerror(errno));
+        KLOG("### ts2ps: "
+                "Unable to open output file %s: %s\n",output_name,
+               strerror(errno));
         return 1;
       }
     }
     if (!quiet)
-      fprint_msg("Writing to   %s\n",(use_stdout?"<stdout>":output_name));
+      printf("Writing to   %s\n",(use_stdout?"<stdout>":output_name));
   }
   
   if (max && !quiet)
-    fprint_msg("Stopping after %d TS packets\n",max);
+    printf("Stopping after %d TS packets\n",max);
 
   err = extract_data(input,output,program_number,max,verbose,quiet);
   if (err)
   {
-    print_err("### ts2ps: Error extracting data\n");
+    KLOG("### ts2ps: Error extracting data\n");
     if (!use_stdin)  (void) close_file(input);
     if (!use_stdout) (void) fclose(output);
     return 1;
@@ -488,8 +468,8 @@ int main(int argc, char **argv)
     err = fclose(output);
     if (err)
     {
-      fprint_err("### ts2ps: Error closing output file %s: %s\n",
-                 output_name,strerror(errno));
+      KLOG("### ts2ps: Error closing output file %s: %s\n",
+              output_name,strerror(errno));
       (void) close_file(input);
       return 1;
     }
@@ -498,7 +478,7 @@ int main(int argc, char **argv)
   {
     err = close_file(input);
     if (err)
-      fprint_err("### ts2ps: Error closing input file %s\n",input_name);
+      KLOG("### ts2ps: Error closing input file %s\n",input_name);
   }
   return 0;
 }

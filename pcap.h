@@ -45,9 +45,6 @@
 //! Invalid magic
 #define PCAP_ERR_INVALID_MAGIC (-10)
 
-#define PCAP_ERR_BAD_LENGTH (-11);
-
-#define PCAP_ERR_BAD_INTERFACE_ID (-12);
 
 /*! File header */
 typedef struct pcap_hdr_s
@@ -107,30 +104,15 @@ typedef struct pcaprec_hdr_s
 
 #define SIZEOF_PCAPREC_HDR_ON_DISC (4 + 4 + 4 + 4)
 
-
-typedef struct pcapng_hdr_interface_s
-{
-    uint16_t link_type;
-    uint32_t snap_len;
-} pcapng_hdr_interface_t;
-
 /*! Used to store I/O parameters for pcap I/O */
-typedef struct _pcap_io_ctx
+struct _pcap_io_ctx
 {
-  // pcap or pcapng?
-  int is_ng;
-
-  /*! Endianness of the file */
-  int is_be;
-
   /*! The FILE* for this file */
   FILE *file;
 
-  uint32_t if_count;
-  uint32_t if_size;
-  pcapng_hdr_interface_t * interfaces;
-
-} PCAP_reader_t;
+  /*! Endianness of the file */
+  int is_be;
+};
 
 typedef struct _pcap_io_ctx *PCAP_reader_p;
 #define SIZEOF_PCAP_READER sizeof(struct _pcap_io_ctx)
@@ -141,7 +123,7 @@ typedef struct _pcap_io_ctx *PCAP_reader_p;
  * \return 0 on success, non-zero on failure.
  */ 
 int pcap_open(PCAP_reader_p *ctx_p, pcap_hdr_t *out_hdr, 
-              const char *filename);
+	      const char *filename);
 
 
 /*! Read the next packet from a pcap file. The returned data is
@@ -151,17 +133,14 @@ int pcap_open(PCAP_reader_p *ctx_p, pcap_hdr_t *out_hdr,
  * \return 1 on success, 0 if we've reached EOF, < 0 on error.
  */
 int pcap_read_next(PCAP_reader_p ctx_p, pcaprec_hdr_t *out_hdr,
-                   uint8_t **out_data,
-                   uint32_t *out_len);
+		   uint8_t **out_data,
+		   uint32_t *out_len);
 
 /*! Close the pcap file */
-int pcap_close(PCAP_reader_p * const ctx_p);
+int pcap_close(PCAP_reader_p *ctx_p);
 
 #endif
-
-// Local Variables:
-// tab-width: 8
-// indent-tabs-mode: nil
-// c-basic-offset: 2
-// End:
-// vim: set tabstop=8 shiftwidth=2 expandtab:
+
+
+/* End file */
+

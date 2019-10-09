@@ -43,7 +43,6 @@
 #include "ts_fns.h"
 #include "pes_fns.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "pidint_fns.h"
 #include "fmtx.h"
 #include "version.h"
@@ -77,30 +76,13 @@ struct diff_from_pcr
   unsigned int  num;          // the number of TS records compared
 };
 
-typedef struct avg_rate_elss
-{
-  uint64_t time;
-  uint64_t bytes;
-} avg_rate_el_t;
-
-typedef struct avg_ratess
-{
-  unsigned int max_els;
-  unsigned int in_el;
-  unsigned int out_el;
-  avg_rate_el_t * els;
-  uint64_t max_rate;
-} avg_rate_t;
-
 struct stream_data {
   uint32_t       pid;
   int           stream_type;
   int           had_a_pts;
   int           had_a_dts;
-  int           first_cc;
   int           last_cc;
   int           cc_dup_count;
-  int           discontinuity_flag_count;
 
   uint64_t       first_pts;
   uint64_t       first_dts;
@@ -109,31 +91,17 @@ struct stream_data {
   // PTS/DTS in the file, when we're finishing up
   uint64_t       pts;
   uint64_t       dts;
-  uint64_t       pcr;
 
   int           err_pts_lt_dts;
   int           err_dts_lt_prev_dts;
   int           err_dts_lt_pcr;
   int           err_cc_error;
   int           err_cc_dup_error;
-  int           err_cc_contents;
-  int           cc_good;
 
   struct diff_from_pcr        pcr_pts_diff;
   struct diff_from_pcr        pcr_dts_diff;
 
-  // Inter DTS max/min values
-  long          dts_dts_min;
-  long          dts_dts_max;
-
   int           pts_ne_dts;
-
-  int           pcr_seen;
-  uint64_t      first_pcr;
-  uint64_t      ts_bytes;
-  avg_rate_t    rate;
-
-  uint8_t       last_pkt[188];
 };
 
 static int pid_index(struct stream_data *data,
@@ -147,58 +115,12 @@ static int pid_index(struct stream_data *data,
   return -1;
 }
 
-unsigned int
-avg_rate_inc(avg_rate_t * ar, unsigned int n)
-{
-  return n + 1 >= ar->max_els ? 0 : n + 1;
-}
-
-static void
-avg_rate_add(avg_rate_t * ar, uint64_t time, uint64_t bytes)
-{
-  uint64_t gap = 27000000 / 2;  // 0.5 sec
-  uint64_t delta_b;
-  uint64_t delta_t;
-  uint64_t rate;
-
-  if (ar->els == NULL)
-  {
-    ar->max_els = 1024;
-    ar->els = calloc(ar->max_els, sizeof(ar->els[0]));
-  }
-
-  while (ar->in_el != ar->out_el && pcr_unsigned_diff(time, ar->els[ar->out_el].time) > gap)
-  {
-    ar->out_el = avg_rate_inc(ar, ar->out_el);
-  }
-
-  ar->els[ar->in_el].time = time;
-  ar->els[ar->in_el].bytes = bytes;
-
-  delta_b = bytes - ar->els[ar->out_el].bytes;
-  delta_t = pcr_unsigned_diff(time, ar->els[ar->out_el].time);
-
-  if (delta_t != 0)
-  {
-    rate = (delta_b * 8LL * 27000000LL) / delta_t;
-    if (rate > ar->max_rate)
-    {
-      ar->max_rate = rate;
-    }
-  }
-
-  ar->in_el = avg_rate_inc(ar, ar->in_el);
-}
-
-
-
 /*
  * Report on the given file
  *
  * Returns 0 if all went well, 1 if something went wrong.
  */
 static int report_buffering_stats(TS_reader_p  tsreader,
-                                  const int    req_prog_no,
                                   int          max,
                                   int          verbose,
                                   int          quiet,
@@ -238,14 +160,9 @@ static int report_buffering_stats(TS_reader_p  tsreader,
 
   uint32_t      pcr_pid;
   uint64_t      first_pcr = 0;
-  offset_t      first_pcr_posn = 0;
   int           pmt_at = 0;     // in case we don't look for a PMT
   int           index;
   int           ii;
-
-  unsigned int  pcr_count = 0;
-  uint64_t      max_pcr_gap = 0;
-  unsigned int  bad_pcr_gap_count = 0;
 
   int           first = TRUE;
   offset_t      posn = 0;
@@ -260,11 +177,7 @@ static int report_buffering_stats(TS_reader_p  tsreader,
     stats[ii].pcr_dts_diff.min = LONG_MAX;
     stats[ii].pcr_pts_diff.max = LONG_MIN;
     stats[ii].pcr_dts_diff.max = LONG_MIN;
-    stats[ii].dts_dts_min = LONG_MAX;
-    stats[ii].dts_dts_max = LONG_MIN;
-    stats[ii].first_pcr = ~(uint64_t)0;
     stats[ii].last_cc = -1;
-    stats[ii].first_cc = -1;
   }
   predict.min_pcr_error = LONG_MAX;
   predict.max_pcr_error = LONG_MIN;
@@ -274,31 +187,27 @@ static int report_buffering_stats(TS_reader_p  tsreader,
     file = fopen(output_name,"w");
     if (file == NULL)
     {
-      fprint_err("### tsreport: Unable to open file %s: %s\n",
-                 output_name,strerror(errno));
+      KLOG("### tsreport: Unable to open file %s: %s\n",
+              output_name,strerror(errno));
       return 1;
     }
-    fprint_msg("Writing CSV data to file %s\n",output_name);
+    printf("Writing CSV data to file %s\n",output_name);
     fprintf(file,"#TSoffset,calc|read,PCR/300,stream,audio|video,PTS,DTS,ESCR\n");
   }
 
   // First we need to determine what we're taking our data from.
-  err = find_pmt(tsreader, req_prog_no, max,FALSE,quiet,&pmt_at,&pmt);
+  err = find_pmt(tsreader,max,FALSE,quiet,&pmt_at,&pmt);
   if (err) return 1;
 
   pcr_pid = pmt->PCR_pid;
-
-  // Tell the buffering mechanism we want to use it
-  err = prime_read_buffered_TS_packet(tsreader,pcr_pid);
-  if (err) return 1;
 
   for (ii=0; ii<pmt->num_streams; ii++)
   {
     uint32_t pid = pmt->streams[ii].elementary_PID;
     if (ii >= MAX_NUM_STREAMS)
     {
-      fprint_msg("!!! Found more than %d streams -- just reporting on the first %d found\n",
-                 MAX_NUM_STREAMS,MAX_NUM_STREAMS);
+      printf("!!! Found more than %d streams -- just reporting on the first %d found\n",
+             MAX_NUM_STREAMS,MAX_NUM_STREAMS);
       break;
     }
     if (pid >= 0x10 && pid <= 0x1FFE)
@@ -309,10 +218,10 @@ static int report_buffering_stats(TS_reader_p  tsreader,
     }
   }
 
-  fprint_msg("Looking at PCR PID %04x (%d)\n",pcr_pid,pcr_pid);
+  printf("Looking at PCR PID %04x (%d)\n",pcr_pid,pcr_pid);
   for (ii=0; ii<num_streams; ii++)
-    fprint_msg("  Stream %d: PID %04x (%d), %s\n",ii,stats[ii].pid,stats[ii].pid,
-               h222_stream_type_str(stats[ii].stream_type));
+    printf("  Stream %d: PID %04x (%d), %s\n",ii,stats[ii].pid,stats[ii].pid,
+           h222_stream_type_str(stats[ii].stream_type));
 
   // Now do the actual work...
   start_count = count = pmt_at;
@@ -320,10 +229,10 @@ static int report_buffering_stats(TS_reader_p  tsreader,
 
   if (continuity_cnt_pid != INVALID_PID)
   {
-    file_cnt = fopen("continuity_counter.txt","w");
+    file_cnt = fopen("continuity_counter.txt","w"); //lorenzo
     if (file_cnt == NULL)
     {
-      print_err("### tsreport: Unable to open file continuity_counter.txt\n");
+      KLOG("### tsreport: Unable to open file continuity_counter.txt\n");
       return 1;
     }
   }
@@ -339,7 +248,7 @@ static int report_buffering_stats(TS_reader_p  tsreader,
 
     if (max > 0 && count >= (uint32_t)max)
     {
-      fprint_msg("Stopping after %d packets (PMT was at %d)\n",max,pmt_at);
+      printf("Stopping after %d packets (PMT was at %d)\n",max,pmt_at);
       break;
     }
 
@@ -362,8 +271,8 @@ static int report_buffering_stats(TS_reader_p  tsreader,
       break;
     else if (err)
     {
-      fprint_err("### Error reading TS packet %d at " OFFSET_T_FORMAT
-                 "\n",count,posn);
+      KLOG("### Error reading TS packet %d at " OFFSET_T_FORMAT
+              "\n",count,posn);
       return 1;
     }
 
@@ -372,8 +281,8 @@ static int report_buffering_stats(TS_reader_p  tsreader,
                           &adapt,&adapt_len,&payload,&payload_len);
     if (err)
     {
-      fprint_err("### Error splitting TS packet %d at " OFFSET_T_FORMAT
-                 "\n",count,posn);
+      KLOG("### Error splitting TS packet %d at " OFFSET_T_FORMAT
+              "\n",count,posn);
       return 1;
     }
 
@@ -387,15 +296,13 @@ static int report_buffering_stats(TS_reader_p  tsreader,
       get_PCR_from_adaptation_field(adapt,adapt_len,&got_pcr,&adapt_pcr);
       if (got_pcr)
       {
-        ++pcr_count;
-
         if (predict.know_pcr_rate)
         {
           // OK, so what we have predicted this PCR would be,
           // given the previous two PCRs and a linear rate?
           uint64_t guess_pcr = estimate_pcr(posn,predict.prev_pcr_posn,
                                            predict.prev_pcr,predict.pcr_rate);
-          int64_t delta = pcr_signed_diff(adapt_pcr, guess_pcr);
+          int64_t delta = adapt_pcr - guess_pcr;
           if (delta < predict.min_pcr_error)
             predict.min_pcr_error = delta;
           if (delta > predict.max_pcr_error)
@@ -403,66 +310,45 @@ static int report_buffering_stats(TS_reader_p  tsreader,
         }
 
         if (verbose)
-          fprint_msg(OFFSET_T_FORMAT_8 ": read PCR %s\n",
-                     posn,
-                     fmtx_timestamp(adapt_pcr, tfmt_abs | FMTX_TS_N_27MHz));
+          printf(OFFSET_T_FORMAT_8 ": read PCR %s\n",
+                 posn,
+                 fmtx_timestamp(adapt_pcr, tfmt_abs | FMTX_TS_N_27MHz));
         if (file)
-          fprintf(file,OFFSET_T_FORMAT ",read," LLU_FORMAT ",,,,\n",
-                  posn,(adapt_pcr / (uint64_t)300) & report_mask);
+          fprintf(file,LLU_FORMAT ",read," LLU_FORMAT ",,,,\n",
+                  posn,(adapt_pcr / (int64_t)300) & report_mask);
 
         if (predict.had_a_pcr)
         {
-          if (pcr_signed_diff(predict.prev_pcr, adapt_pcr) > 0)
+          if (predict.prev_pcr > adapt_pcr)
           {
-            fprint_err("!!! PCR %s at TS packet "
-                       OFFSET_T_FORMAT " is not more than previous PCR %s\n",
-                       fmtx_timestamp(adapt_pcr, tfmt_abs | FMTX_TS_N_27MHz),
-                       posn,
-                       fmtx_timestamp(predict.prev_pcr, tfmt_abs | FMTX_TS_N_27MHz));
+            KLOG("!!! PCR %s at TS packet "
+                    OFFSET_T_FORMAT " is not more than previous PCR %s\n",
+                    fmtx_timestamp(adapt_pcr, tfmt_abs | FMTX_TS_N_27MHz),
+                    posn,
+                    fmtx_timestamp(predict.prev_pcr, tfmt_abs | FMTX_TS_N_27MHz));
           }
           else
           {
-            uint64_t delta_pcr = pcr_unsigned_diff(adapt_pcr, predict.prev_pcr);
+            uint64_t delta_pcr = adapt_pcr - predict.prev_pcr;
             int delta_bytes = (int)(posn - predict.prev_pcr_posn);
             predict.pcr_rate = ((double)delta_bytes * 27.0 / (double)delta_pcr) * 1000000.0;
             predict.know_pcr_rate = TRUE;
-
-            if (delta_pcr > max_pcr_gap)
-              max_pcr_gap = delta_pcr;
-
-            if (delta_pcr > 27000000 / 10)
-            {
-              if (bad_pcr_gap_count++ == 0)
-                fprint_err("!!! PCR gap of %s @ PCR %s > 0.1sec...\n",
-                    fmtx_timestamp(delta_pcr, tfmt_diff | FMTX_TS_N_27MHz),
-                    fmtx_timestamp(adapt_pcr, tfmt_abs | FMTX_TS_N_27MHz));
-            }
-
 #if 0   // XXX
-            fprint_msg("PCR RATE = %f, DELTA_BYTES = %d, DELTA_PCR " LLU_FORMAT
-                       ", PCR = " LLU_FORMAT "\n",
-                       predict.pcr_rate,delta_bytes,delta_pcr,adapt_pcr);
+            printf("PCR RATE = %f, DELTA_BYTES = %d, DELTA_PCR " LLU_FORMAT
+                   ", PCR = " LLU_FORMAT "\n",
+                   predict.pcr_rate,delta_bytes,delta_pcr,adapt_pcr);
 #endif
           }
         }
         else
         {
           if (!quiet)
-            fprint_msg("First PCR at " OFFSET_T_FORMAT "\n",posn);
+            printf("First PCR at " OFFSET_T_FORMAT "\n",posn);
           first_pcr = adapt_pcr;
-          first_pcr_posn = posn;
           predict.had_a_pcr = TRUE;
         }
         predict.prev_pcr = adapt_pcr;
         predict.prev_pcr_posn = posn;
-      }
-
-      {
-        int i;
-        for (i = 0; i != num_streams; ++i)
-        {
-          stats[i].pcr_seen = TRUE;
-        }
       }
     }   // end of working with a PCR PID packet
     // ========================================================================
@@ -472,131 +358,46 @@ static int report_buffering_stats(TS_reader_p  tsreader,
     if (index != -1)
     {
       // Do continuity counter checking
-      const int cc = packet[3] & 15;
-      const int is_discontinuity = (adapt != NULL && (adapt[0] & 0x80) != 0);
-      struct stream_data * const ss = stats + index;
+      int cc = packet[3] & 15;
 
       // Log if required
       if (continuity_cnt_pid == pid)
         fprintf(file_cnt, "%d%c", cc, cc == 15 ? '\n' : ' ');
 
-      // Count flagged discontinuities & note what the first CC in the file is
-      ss->discontinuity_flag_count += is_discontinuity;
-      if (ss->first_cc < 0)
-        ss->first_cc = cc;
-
-      // CC is meant to increment if we have a payload and not if we don't
-      // CC may legitimately 'be wrong' if the discontinuity flag is set
-
-      if (ss->last_cc > 0 && !is_discontinuity)
+      if (stats[index].last_cc > 0)
       {
         // We are allowed 1 dup packet
-        if (ss->last_cc == cc)
+        // *** Could check that it actually is a dup...
+        if (stats[index].last_cc == cc)
         {
-          if (payload)
+          if (stats[index].cc_dup_count++ != 0)
           {
-            if (ss->cc_dup_count++ != 0)
+            if (stats[index].err_cc_dup_error++ == 0)
             {
               if (continuity_cnt_pid == pid)
                 fprintf(file_cnt, "[Duplicate error] ");
-              if (ss->err_cc_dup_error++ == 0)
-              {
-                fprint_msg("### PID(%d): Continuity Counter >1 duplicate %d at " OFFSET_T_FORMAT "\n",
-                           ss->pid, cc, posn);
-              }
-            }
-  
-            // Whilst everything else must be identical PCR is expected to
-            // change if it is given.  If it exists we know where it is.
-            if (!got_pcr ? (memcmp(ss->last_pkt, packet, 188) != 0) :
-                (memcmp(ss->last_pkt, packet, 6) != 0 ||
-                 memcmp(ss->last_pkt + 12, packet + 12, 188 - 12) != 0))
-            {
-              if (ss->err_cc_contents++ == 0)
-                fprint_msg("### PID(%d): Continuity Counter duplicate %d: non identical contents at " OFFSET_T_FORMAT "\n",
-                           ss->pid, cc, posn);
-              // Assume that non-identical CC means we had a discontinuity and
-              // therefore let this packet through
-#if 0
-              {
-                const uint8_t * a = ss->last_pkt;
-                const uint8_t * b = packet;
-                int i;
-
-                fprint_msg("CC contents:\n");
-
-                for (i = 0; i < 188; i += 16, a += 16, b += 16)
-                {
-                  int j;
-                  const int n = min(16, 188 - i);
-                  for (j = 0; j < n; ++j)
-                  {
-                    fprint_msg("%c%02x", a[j] == b[j] ? ' ' : '*', a[j]);
-                  }
-                  fprint_msg("\n");
-                  for (j = 0; j < n; ++j)
-                  {
-                    fprint_msg("%c%02x", a[j] == b[j] ? ' ' : '*', b[j]);
-                  }
-                  fprint_msg("\n\n");
-                }
-              }
-#endif
-            }
-            else
-            {
-              // Real redundant TS packet!
-              // Log it and discard
-              ++ss->cc_good;
-              continue;
+              printf("### PID(%d): Continuity Counter >1 duplicate %d at " OFFSET_T_FORMAT "\n",
+                stats[index].pid, cc, posn);
             }
           }
         }
         else
         {
           // Otherwise CC must go up by 1 mod 16
-          ss->cc_dup_count = 0;
-          if (payload)
+          stats[index].cc_dup_count = 0;
+          if (((stats[index].last_cc + 1) & 15) != cc)
           {
-            if (((ss->last_cc + 1) & 15) != cc)
+            if (stats[index].err_cc_error++ == 0)
             {
               if (continuity_cnt_pid == pid)
                 fprintf(file_cnt, "[Discontinuity] ");
-              if (ss->err_cc_error++ == 0)
-              {
-                fprint_msg("### PID(%d): Continuity Counter discontinuity %d->%d at " OFFSET_T_FORMAT "\n",
-                  ss->pid, ss->last_cc, cc, posn);
-              }
-            }
-          }
-          else
-          {
-            // CC not the same but it should be
-            if (continuity_cnt_pid == pid)
-              fprintf(file_cnt, "[Discontinuity] ");
-            if (ss->err_cc_error++ == 0)
-            {
-              fprint_msg("### PID(%d): Continuity Counter discontinuity %d->%d (but no payload) at " OFFSET_T_FORMAT "\n",
-                ss->pid, ss->last_cc, cc, posn);
+              printf("### PID(%d): Continuity Counter discontinuity %d->%d at " OFFSET_T_FORMAT "\n",
+                stats[index].pid, stats[index].last_cc, cc, posn);
             }
           }
         }
       }
-      ss->last_cc = cc;
-      memcpy(ss->last_pkt, packet, 188);
-    }
-
-    if (index != -1)
-    {
-      if (stats[index].pcr_seen)
-      {
-        stats[index].pcr_seen = FALSE;
-        avg_rate_add(&stats[index].rate, acc_pcr, stats[index].ts_bytes);
-      }
-      if (stats[index].first_pcr == ~(uint64_t)0)
-        stats[index].first_pcr = acc_pcr;
-      stats[index].pcr = acc_pcr;
-      stats[index].ts_bytes += 188;
+      stats[index].last_cc = cc;
     }
 
     if (index != -1 && payload && payload_unit_start_indicator)
@@ -611,64 +412,55 @@ static int report_buffering_stats(TS_reader_p  tsreader,
                                 &got_pts,&stats[index].pts,&got_dts,&stats[index].dts);
       if (err)
       {
-        fprint_err("### PID(%d): Error looking for PTS/DTS in TS packet at "
-                   OFFSET_T_FORMAT "\n", stats[index].pid, posn);
-        continue;
+        KLOG("### Error looking for PTS/DTS in TS packet at "
+                OFFSET_T_FORMAT "\n",posn);
+        return 1;
       }
 
       if (got_dts && !got_pts)
       {
-        fprint_err("### Got DTS but not PTS, in TS packet at "
-                   OFFSET_T_FORMAT "\n",posn);
+        KLOG("### Got DTS but not PTS, in TS packet at "
+                OFFSET_T_FORMAT "\n",posn);
         return 1;
       }
 
       if (!got_pts)
         continue;
 
-      pcr_time_now_div300 = acc_pcr/300ULL;
+      pcr_time_now_div300 = acc_pcr/300;
 
       // Do a few simple checks
       // For the sake of simplicity we ignore 33bit wrap...
-      if (pts_signed_diff(stats[index].pts, stats[index].dts) < 0)
+      if (stats[index].pts < stats[index].dts)
       {
         if (stats[index].err_pts_lt_dts++ == 0)
-          fprint_msg("### PID(%d): PTS (%s) < DTS (%s)\n",
-                     stats[index].pid,
-                     fmtx_timestamp(stats[index].pts, tfmt_abs),
-                     fmtx_timestamp(stats[index].dts, tfmt_abs));
+          printf("### PID(%d): PTS (%s) < DTS (%s)\n",
+            stats[index].pid,
+            fmtx_timestamp(stats[index].pts, tfmt_abs),
+            fmtx_timestamp(stats[index].dts, tfmt_abs));
       }
-      if (stats[index].had_a_dts)
+      if (stats[index].had_a_dts && stats[index].dts < last_dts)
       {
-        int64_t dts_dts_diff = pts_signed_diff(stats[index].dts, last_dts);
-        if (dts_dts_diff < stats[index].dts_dts_min)
-          stats[index].dts_dts_min = (long)dts_dts_diff;
-        if (dts_dts_diff > stats[index].dts_dts_max)
-          stats[index].dts_dts_max = (long)dts_dts_diff;
-
-        if (dts_dts_diff < 0)
-        {
-          if (stats[index].err_dts_lt_prev_dts++ == 0)
-            fprint_msg("### PID(%d): DTS (%s) < previous DTS (%s)\n",
-                       stats[index].pid,
-                       fmtx_timestamp(stats[index].dts, tfmt_abs),
-                       fmtx_timestamp(last_dts, tfmt_abs));
-        }
+        if (stats[index].err_dts_lt_prev_dts++ == 0)
+          printf("### PID(%d): DTS (%s) < previous DTS (%s)\n",
+            stats[index].pid,
+            fmtx_timestamp(stats[index].dts, tfmt_abs),
+            fmtx_timestamp(last_dts, tfmt_abs));
       }
-      if (pts_signed_diff(stats[index].dts, pcr_time_now_div300) < 0)
+      if (stats[index].dts < pcr_time_now_div300)
       {
         if (stats[index].err_dts_lt_pcr++ == 0)
-          fprint_msg("### PID(%d): DTS (%s) < PCR (%s)\n",
-                     stats[index].pid,
-                     fmtx_timestamp(stats[index].dts, tfmt_abs),
-                     fmtx_timestamp(acc_pcr, tfmt_abs | FMTX_TS_N_27MHz));
+          printf("### PID(%d): DTS (%s) < PCR (%s)\n",
+            stats[index].pid,
+            fmtx_timestamp(stats[index].dts, tfmt_abs),
+            fmtx_timestamp(acc_pcr, tfmt_abs | FMTX_TS_N_27MHz));
       }
 
       if (!stats[index].had_a_pts)
       {
 #if 0  // XXX Sometimes useful to know
-        fprint_msg("  First stream %d PTS (after first PCR) at " OFFSET_T_FORMAT "\n",
-                   index,posn);
+        printf("  First stream %d PTS (after first PCR) at " OFFSET_T_FORMAT "\n",
+               index,posn);
 #endif
         stats[index].first_pts = stats[index].pts;
         stats[index].had_a_pts = TRUE;
@@ -676,8 +468,8 @@ static int report_buffering_stats(TS_reader_p  tsreader,
       if (got_dts && !stats[index].had_a_dts)
       {
 #if 0  // XXX Sometimes useful to know
-        fprint_msg("  First stream %d DTS (after first PCR) at " OFFSET_T_FORMAT "\n",
-                   index,posn);
+        printf("  First stream %d DTS (after first PCR) at " OFFSET_T_FORMAT "\n",
+               index,posn);
 #endif
         stats[index].first_dts = stats[index].dts;
         stats[index].had_a_dts = TRUE;
@@ -709,31 +501,30 @@ static int report_buffering_stats(TS_reader_p  tsreader,
         if (got_escr)
         {
           if (!quiet)
-            fprint_msg("Found ESCR " LLU_FORMAT " at " OFFSET_T_FORMAT "\n",
-                       escr,posn);
+            printf("Found ESCR " LLU_FORMAT " at " OFFSET_T_FORMAT "\n",
+                   escr,posn);
           fprintf(file,LLU_FORMAT,escr & report_mask);
         }
-        fprintf(file, ",%u", (payload[4] << 8) | payload[5]);
         fprintf(file,"\n");
       }
 
       if (verbose)
       {
-        fprint_msg(OFFSET_T_FORMAT_8 ": %s PCR " LLU_FORMAT " %d %5s",
-                   posn,
-                   (pcr_pid == pid && got_pcr)?"    ":"calc",
-                   pcr_time_now_div300,
-                   index,
-                   IS_AUDIO_STREAM_TYPE(stats[index].stream_type)?"audio":
-                   IS_VIDEO_STREAM_TYPE(stats[index].stream_type)?"video":"");
+        printf(OFFSET_T_FORMAT_8 ": %s PCR " LLU_FORMAT " %d %5s",
+               posn,
+               (pcr_pid == pid && got_pcr)?"    ":"calc",
+               pcr_time_now_div300,
+               index,
+               IS_AUDIO_STREAM_TYPE(stats[index].stream_type)?"audio":
+               IS_VIDEO_STREAM_TYPE(stats[index].stream_type)?"video":"");
       }
 
-      difference = pts_signed_diff(stats[index].pts, pcr_time_now_div300);
+      difference = stats[index].pts - pcr_time_now_div300;
       if (verbose)
       {
-        fprint_msg(" PTS " LLU_FORMAT,stats[index].pts);
-        print_msg(" PTS-PCR ");
-        fprint_msg(LLD_FORMAT, difference);
+        printf(" PTS " LLU_FORMAT,stats[index].pts);
+        printf(" PTS-PCR ");
+        printf(LLD_FORMAT, difference);
       }
       if (difference > stats[index].pcr_pts_diff.max)
       {
@@ -752,12 +543,12 @@ static int report_buffering_stats(TS_reader_p  tsreader,
 
       if (got_dts)
       {
-        difference = pts_signed_diff(stats[index].dts, pcr_time_now_div300);
+        difference = stats[index].dts - pcr_time_now_div300;
         if (verbose)
         {
-          fprint_msg(" DTS " LLU_FORMAT,stats[index].dts);
-          print_msg(" DTS-PCR ");
-          fprint_msg(LLD_FORMAT, difference & report_mask);
+          printf(" DTS " LLU_FORMAT,stats[index].dts);
+          printf(" DTS-PCR ");
+          printf(LLD_FORMAT, difference & report_mask);
         }
         if (difference > stats[index].pcr_dts_diff.max)
         {
@@ -776,116 +567,92 @@ static int report_buffering_stats(TS_reader_p  tsreader,
       }
 
       if (verbose)
-        print_msg("\n");
+        printf("\n");
     }
   }
 
   if (continuity_cnt_pid != INVALID_PID)
   {
     fprintf(file_cnt, "\n");
-    fclose(file_cnt);
+    fclose(file_cnt); //lorenzo
   }
 
   if (!quiet)
-    fprint_msg("Last PCR at " OFFSET_T_FORMAT "\n",predict.prev_pcr_posn);
-  fprint_msg("Read %d TS packet%s\n",count,(count==1?"":"s"));
+    printf("Last PCR at " OFFSET_T_FORMAT "\n",predict.prev_pcr_posn);
+  printf("Read %d TS packet%s\n",count,(count==1?"":"s"));
   if (pmt) free_pmt(&pmt);
   if (file) fclose(file);
-  if (predict.had_a_pcr && predict.prev_pcr_posn > first_pcr_posn)
-  {
-    // Multiply by 8 at the end to give us a bit more headroom in file size
-    int rate = (int)((predict.prev_pcr_posn - first_pcr_posn) * 27000000LL / pcr_unsigned_diff(predict.prev_pcr, first_pcr)) * 8;
-    fprint_msg("Overall stream rate=%d bits/sec\n", rate);
-  }
 
-  fprint_msg("PCRs found: %u, Bad (>.1s) gaps: %u, Max gap: %s\n",
-      pcr_count, bad_pcr_gap_count,
-      fmtx_timestamp(max_pcr_gap, tfmt_diff | FMTX_TS_N_27MHz));
-  fprint_msg("Linear PCR prediction errors: min=%s, max=%s\n",
-             fmtx_timestamp(predict.min_pcr_error, tfmt_diff | FMTX_TS_N_27MHz),
-             fmtx_timestamp(predict.max_pcr_error, tfmt_diff | FMTX_TS_N_27MHz));
+  printf("Linear PCR prediction errors: min=%s, max=%s\n",
+         fmtx_timestamp(predict.min_pcr_error, tfmt_diff),
+         fmtx_timestamp(predict.max_pcr_error, tfmt_diff));
+
+  if (!stats[0].had_a_pts && !stats[1].had_a_pts &&
+      !stats[0].had_a_dts && !stats[1].had_a_dts)
+    printf("\n"
+           "No PTS or DTS values found\n");
 
   for (ii = 0; ii < num_streams; ii++)
   {
-    struct stream_data * const ss = stats + ii;
-
-    fprint_msg("\nStream %d: PID %04x (%d), %s\n",ii,ss->pid,ss->pid,
-               h222_stream_type_str(ss->stream_type));
-    if (ss->pcr_pts_diff.num > 0)
+    printf("\nStream %d: PID %04x (%d), %s\n",ii,stats[ii].pid,stats[ii].pid,
+           h222_stream_type_str(stats[ii].stream_type));
+    if (stats[ii].pcr_pts_diff.num > 0)
     {
-      fprint_msg("  PCR/%s:\n    Minimum difference was %6s at DTS %8s, TS packet at " OFFSET_T_FORMAT_8 "\n",
-                 ss->pts_ne_dts ? "PTS" : "PTS,DTS",
-                 fmtx_timestamp(ss->pcr_pts_diff.min, tfmt_diff),
-                 fmtx_timestamp(ss->pcr_pts_diff.min_at, tfmt_abs),
-                 ss->pcr_pts_diff.min_posn);
-      fprint_msg("    Maximum difference was %6s at DTS %8s, TS packet at " OFFSET_T_FORMAT_8 "\n",
-                 fmtx_timestamp(ss->pcr_pts_diff.max, tfmt_diff),
-                 fmtx_timestamp(ss->pcr_pts_diff.max_at, tfmt_abs),
-                 ss->pcr_pts_diff.max_posn);
-      fprint_msg("    i.e., a span of %s\n",
-                 fmtx_timestamp(ss->pcr_pts_diff.max - ss->pcr_pts_diff.min, tfmt_diff));
-      fprint_msg("    Mean difference (of %u) is %s\n",
-                 ss->pcr_pts_diff.num,
-                 fmtx_timestamp((int64_t)(ss->pcr_pts_diff.sum/(double)ss->pcr_pts_diff.num), tfmt_diff));
+      printf("  PCR/%s:\n    Minimum difference was %6s at DTS %8s, TS packet at " OFFSET_T_FORMAT_8 "\n",
+             stats[ii].pts_ne_dts ? "PTS" : "PTS,DTS",
+             fmtx_timestamp(stats[ii].pcr_pts_diff.min, tfmt_diff),
+             fmtx_timestamp(stats[ii].pcr_pts_diff.min_at, tfmt_abs),
+             stats[ii].pcr_pts_diff.min_posn);
+      printf("    Maximum difference was %6s at DTS %8s, TS packet at " OFFSET_T_FORMAT_8 "\n",
+             fmtx_timestamp(stats[ii].pcr_pts_diff.max, tfmt_diff),
+             fmtx_timestamp(stats[ii].pcr_pts_diff.max_at, tfmt_abs),
+             stats[ii].pcr_pts_diff.max_posn);
+      printf("    i.e., a span of %s\n",
+             fmtx_timestamp(stats[ii].pcr_pts_diff.max - stats[ii].pcr_pts_diff.min, tfmt_diff));
+      printf("    Mean difference (of %u) is %s\n",
+             stats[ii].pcr_pts_diff.num,
+             fmtx_timestamp((int64_t)(stats[ii].pcr_pts_diff.sum/(double)stats[ii].pcr_pts_diff.num), tfmt_diff));
     }
 
-    if (ss->pcr_dts_diff.num > 0 && ss->pts_ne_dts)
+    if (stats[ii].pcr_dts_diff.num > 0 && stats[ii].pts_ne_dts)
     {
-      fprint_msg("  PCR/DTS:\n    Minimum difference was %6s at DTS %8s, TS packet at " OFFSET_T_FORMAT_8 "\n",
-                 fmtx_timestamp(ss->pcr_dts_diff.min, tfmt_diff),
-                 fmtx_timestamp(ss->pcr_dts_diff.min_at, tfmt_abs),
-                 ss->pcr_dts_diff.min_posn);
-      fprint_msg("    Maximum difference was %6s at DTS %8s, TS packet at " OFFSET_T_FORMAT_8 "\n",
-                 fmtx_timestamp(ss->pcr_dts_diff.max, tfmt_diff),
-                 fmtx_timestamp(ss->pcr_dts_diff.max_at, tfmt_abs),
-                 ss->pcr_dts_diff.max_posn);
-      fprint_msg("    i.e., a span of %s\n",
-                 fmtx_timestamp(ss->pcr_dts_diff.max - ss->pcr_dts_diff.min, tfmt_diff));
-      fprint_msg("    Mean difference (of %u) is %s\n",
-                 ss->pcr_dts_diff.num,
-                 fmtx_timestamp((int64_t)(ss->pcr_dts_diff.sum/(double)ss->pcr_dts_diff.num), tfmt_diff));
-    }
-    if (ss->had_a_dts)
-    {
-      fprint_msg("  DTS-last DTS: min=%s, max=%s\n",
-        fmtx_timestamp(ss->dts_dts_min, tfmt_diff),
-        fmtx_timestamp(ss->dts_dts_max, tfmt_diff));
+      printf("  PCR/DTS:\n    Minimum difference was %6s at DTS %8s, TS packet at " OFFSET_T_FORMAT_8 "\n",
+             fmtx_timestamp(stats[ii].pcr_dts_diff.min, tfmt_diff),
+             fmtx_timestamp(stats[ii].pcr_dts_diff.min_at, tfmt_abs),
+             stats[ii].pcr_dts_diff.min_posn);
+      printf("    Maximum difference was %6s at DTS %8s, TS packet at " OFFSET_T_FORMAT_8 "\n",
+             fmtx_timestamp(stats[ii].pcr_dts_diff.max, tfmt_diff),
+             fmtx_timestamp(stats[ii].pcr_dts_diff.max_at, tfmt_abs),
+             stats[ii].pcr_dts_diff.max_posn);
+      printf("    i.e., a span of %s\n",
+             fmtx_timestamp(stats[ii].pcr_dts_diff.max - stats[ii].pcr_dts_diff.min, tfmt_diff));
+      printf("    Mean difference (of %u) is %s\n",
+             stats[ii].pcr_dts_diff.num,
+             fmtx_timestamp((int64_t)(stats[ii].pcr_dts_diff.sum/(double)stats[ii].pcr_dts_diff.num), tfmt_diff));
     }
 
-    fprint_msg("  First PCR %8s, last %8s\n",
-               fmtx_timestamp(first_pcr, tfmt_abs | FMTX_TS_N_27MHz),
-               fmtx_timestamp(predict.prev_pcr, tfmt_abs | FMTX_TS_N_27MHz));
-    if (ss->pcr_pts_diff.num > 0)
-      fprint_msg("  First PTS %8s, last %8s\n",
-                 fmtx_timestamp(ss->first_pts, tfmt_abs),
-                 fmtx_timestamp(ss->pts, tfmt_abs));
-    if (ss->pcr_dts_diff.num > 0)
-      fprint_msg("  First DTS %8s, last %8s\n",
-                 fmtx_timestamp(ss->first_dts, tfmt_abs),
-                 fmtx_timestamp(ss->dts, tfmt_abs));
+    printf("  First PCR %8s, last %8s\n",
+             fmtx_timestamp(first_pcr, tfmt_abs | FMTX_TS_N_27MHz),
+             fmtx_timestamp(predict.prev_pcr, tfmt_abs | FMTX_TS_N_27MHz));
+    if (stats[ii].pcr_pts_diff.num > 0)
+      printf("  First PTS %8s, last %8s\n",
+             fmtx_timestamp(stats[ii].first_pts, tfmt_abs),
+             fmtx_timestamp(stats[ii].pts, tfmt_abs));
+    if (stats[ii].pcr_dts_diff.num > 0)
+      printf("  First DTS %8s, last %8s\n",
+             fmtx_timestamp(stats[ii].first_dts, tfmt_abs),
+             fmtx_timestamp(stats[ii].dts, tfmt_abs));
 
-    {
-      // Calculate rate over the range of PCRs seen in this stream
-      uint64_t avg = ss->pcr == ss->first_pcr ? 0LL :
-         ((ss->ts_bytes - 188LL) * 8LL * 27000000LL) / pcr_unsigned_diff(ss->pcr, ss->first_pcr);
-      fprint_msg("  Stream: %llu bytes; rate: avg %llu bits/s, max %llu bits/s\n", ss->ts_bytes, avg, ss->rate.max_rate);
-    }
-    if (ss->discontinuity_flag_count != 0)
-      fprint_msg("  Discontinuity flags: *%d", ss->discontinuity_flag_count);
-    fprint_msg("  CC: first: %d, last: %d; duplicate packets: %d\n", ss->first_cc, ss->last_cc, ss->cc_good);
-
-    if (ss->err_cc_error != 0)
-      fprint_msg("  ### CC error * %d\n", ss->err_cc_error);
-    if (ss->err_cc_contents != 0)
-      fprint_msg("  ### CC contents error * %d\n", ss->err_cc_contents);
-    if (ss->err_cc_dup_error != 0)
-      fprint_msg("  ### CC duplicate error * %d\n", ss->err_cc_dup_error);
-    if (ss->err_pts_lt_dts != 0)
-      fprint_msg("  ### PTS < DTS * %d\n", ss->err_pts_lt_dts);
-    if (ss->err_dts_lt_prev_dts != 0)
-      fprint_msg("  ### DTS < prev DTS * %d\n", ss->err_dts_lt_prev_dts);
-    if (ss->err_dts_lt_pcr != 0)
-      fprint_msg("  ### DTS < PCR * %d\n", ss->err_dts_lt_pcr);
+    if (stats[ii].err_cc_error != 0)
+      printf("  ### CC error * %d\n", stats[ii].err_cc_error);
+    if (stats[ii].err_cc_dup_error != 0)
+      printf("  ### CC duplicate error * %d\n", stats[ii].err_cc_dup_error);
+    if (stats[ii].err_pts_lt_dts != 0)
+      printf("  ### PTS < DTS * %d\n", stats[ii].err_pts_lt_dts);
+    if (stats[ii].err_dts_lt_prev_dts != 0)
+      printf("  ### DTS < prev DTS * %d\n", stats[ii].err_dts_lt_prev_dts);
+    if (stats[ii].err_dts_lt_pcr != 0)
+      printf("  ### DTS < PCR * %d\n", stats[ii].err_dts_lt_pcr);
   }
   return 0;
 }
@@ -929,7 +696,7 @@ static int report_ts(TS_reader_p  tsreader,
 
     if (max > 0 && count >= max)
     {
-      fprint_msg("Stopping after %d packets\n",max);
+      printf("Stopping after %d packets\n",max);
       break;
     }
 
@@ -940,8 +707,8 @@ static int report_ts(TS_reader_p  tsreader,
       break;
     else if (err)
     {
-      fprint_err("### Error reading TS packet %d at " OFFSET_T_FORMAT
-                 "\n",count,tsreader->posn - TS_PACKET_SIZE);
+      KLOG("### Error reading TS packet %d at " OFFSET_T_FORMAT
+              "\n",count,tsreader->posn - TS_PACKET_SIZE);
       free_pidint_list(&prog_list);
       if (pmt_data) free(pmt_data);
       return 1;
@@ -950,41 +717,41 @@ static int report_ts(TS_reader_p  tsreader,
     count ++;
 
     if (verbose)
-      fprint_msg(OFFSET_T_FORMAT_8 ": TS Packet %2d PID %04x%s",
-                 tsreader->posn - TS_PACKET_SIZE,count,pid,
-                 (payload_unit_start_indicator?" [pusi]":""));
+      printf(OFFSET_T_FORMAT_8 ": TS Packet %2d PID %04x%s",
+             tsreader->posn - TS_PACKET_SIZE,count,pid,
+             (payload_unit_start_indicator?" [pusi]":""));
 
     // Report on what we may
     if (verbose)
     {
       if (pid == 0x1fff)
-        print_msg(" PADDING - ignored\n");
+        printf(" PADDING - ignored\n");
       else if (pid == 0x0000)
-        print_msg(" PAT\n");
+        printf(" PAT\n");
       else if (pid == 0x0001)
-        print_msg(" Conditional Access Table - ignored\n");
+        printf(" Conditional Access Table - ignored\n");
       else if (pid >= 0x0002 && pid <= 0x000F)
-        print_msg(" RESERVED - ignored\n");
+        printf(" RESERVED - ignored\n");
       else if (pid_in_pidint_list(prog_list,pid))
-        print_msg(" PMT\n");
+        printf(" PMT\n");
       else if (pid_in_pmt(pmt,pid))
       {
         pmt_stream_p  stream = pid_stream_in_pmt(pmt,pid);
         if (stream == NULL)
         {
-          fprint_err("### Internal error: stream for PID %0x returned NULL"
-                     " in PMT\n",pid);
-          report_pmt(FALSE,"    ",pmt);
+          KLOG("### Internal error: stream for PID %0x returned NULL"
+                  " in PMT\n",pid);
+          report_pmt(stderr,"    ",pmt);
           free_pidint_list(&prog_list);
           free_pmt(&pmt);
           if (pmt_data) free(pmt_data);
           return 1;
         }
-        fprint_msg(" stream type %02x (%s)\n",
-                   stream->stream_type,h222_stream_type_str(stream->stream_type));
+        printf(" stream type %02x (%s)\n",
+               stream->stream_type,h222_stream_type_str(stream->stream_type));
       }
       else
-        print_msg(" stream type not identified\n");
+        printf(" stream type not identified\n");
     }
 
     // Ignore padding packets
@@ -1011,9 +778,9 @@ static int report_ts(TS_reader_p  tsreader,
       }
       else if (!payload_unit_start_indicator && !pat_data)
       {
-        fprint_err("!!! Discarding partial (unstarted) PAT in TS"
-                   " packet at " OFFSET_T_FORMAT "\n",
-                   tsreader->posn - TS_PACKET_SIZE);
+        KLOG("!!! Discarding partial (unstarted) PAT in TS"
+                " packet at " OFFSET_T_FORMAT "\n",
+                tsreader->posn - TS_PACKET_SIZE);
         continue;
       }
 
@@ -1021,9 +788,9 @@ static int report_ts(TS_reader_p  tsreader,
                            &pat_data,&pat_data_len,&pat_data_used);
       if (err)
       {
-        fprint_err("### Error %s PAT in TS packet at " OFFSET_T_FORMAT "\n",
-                   (payload_unit_start_indicator?"starting new":"continuing"),
-                   tsreader->posn - TS_PACKET_SIZE);
+        KLOG("### Error %s PAT in TS packet at " OFFSET_T_FORMAT "\n",
+                (payload_unit_start_indicator?"starting new":"continuing"),
+                tsreader->posn - TS_PACKET_SIZE);
         free_pidint_list(&prog_list);
         if (pat_data) free(pat_data);
         return 1;
@@ -1039,9 +806,9 @@ static int report_ts(TS_reader_p  tsreader,
       err = extract_prog_list_from_pat(verbose,pat_data,pat_data_len,&prog_list);
       if (err)
       {
-        fprint_err("### Error extracting program list from PAT in TS"
-                   " packet at " OFFSET_T_FORMAT "\n",
-                   tsreader->posn - TS_PACKET_SIZE);
+        KLOG("### Error extracting program list from PAT in TS"
+                " packet at " OFFSET_T_FORMAT "\n",
+                tsreader->posn - TS_PACKET_SIZE);
         free_pidint_list(&prog_list);
         if (pat_data) free(pat_data);
         return 1;
@@ -1069,10 +836,10 @@ static int report_ts(TS_reader_p  tsreader,
           // This is the continuation of another PMT - let's ignore
           // it for now and hope we'll find the rest of the one we're
           // still waiting to finish
-          fprint_err("!!! Discarding partial PMT with PID %04x in TS"
-                     " packet at " OFFSET_T_FORMAT ", already building PMT with PID %04x\n",
-                     unfinished_pmt_pid,
-                     tsreader->posn - TS_PACKET_SIZE,pid);
+          KLOG("!!! Discarding partial PMT with PID %04x in TS"
+                  " packet at " OFFSET_T_FORMAT ", already building PMT with PID %04x\n",
+                  unfinished_pmt_pid,
+                  tsreader->posn - TS_PACKET_SIZE,pid);
           continue;
         }
       }
@@ -1085,9 +852,9 @@ static int report_ts(TS_reader_p  tsreader,
       }
       else if (!payload_unit_start_indicator && !pmt_data)
       {
-        fprint_err("!!! Discarding partial (unstarted) PMT in TS"
-                   " packet at " OFFSET_T_FORMAT "\n",
-                   tsreader->posn - TS_PACKET_SIZE);
+        KLOG("!!! Discarding partial (unstarted) PMT in TS"
+                " packet at " OFFSET_T_FORMAT "\n",
+                tsreader->posn - TS_PACKET_SIZE);
         continue;
       }
 
@@ -1095,9 +862,9 @@ static int report_ts(TS_reader_p  tsreader,
                            &pmt_data,&pmt_data_len,&pmt_data_used);
       if (err)
       {
-        fprint_err("### Error %s PMT in TS packet at " OFFSET_T_FORMAT "\n",
-                   (payload_unit_start_indicator?"starting new":"continuing"),
-                   tsreader->posn - TS_PACKET_SIZE);
+        KLOG("### Error %s PMT in TS packet at " OFFSET_T_FORMAT "\n",
+                (payload_unit_start_indicator?"starting new":"continuing"),
+                tsreader->posn - TS_PACKET_SIZE);
         free_pidint_list(&prog_list);
         free_pmt(&pmt);
         if (pmt_data) free(pmt_data);
@@ -1120,9 +887,9 @@ static int report_ts(TS_reader_p  tsreader,
       err = extract_pmt(verbose,pmt_data,pmt_data_len,pid,&pmt);
       if (err)
       {
-        fprint_err("### Error extracting stream list from PMT in TS"
-                   " packet at " OFFSET_T_FORMAT "\n",
-                   tsreader->posn - TS_PACKET_SIZE);
+        KLOG("### Error extracting stream list from PMT in TS"
+                " packet at " OFFSET_T_FORMAT "\n",
+                tsreader->posn - TS_PACKET_SIZE);
         free_pidint_list(&prog_list);
         free_pmt(&pmt);
         if (pmt_data) free(pmt_data);
@@ -1132,9 +899,9 @@ static int report_ts(TS_reader_p  tsreader,
       if (pmt_data) free(pmt_data);
       pmt_data = NULL; pmt_data_len = 0; pmt_data_used = 0;
 #if 0
-      print_msg("PMT data read as:\n");
-      report_pmt(TRUE,"  ",pmt);
-      print_msg("\n");
+      printf("PMT data read as:\n");
+      report_pmt(stdout,"  ",pmt);
+      printf("\n");
 #endif
     }
     else if (verbose)
@@ -1149,14 +916,14 @@ static int report_ts(TS_reader_p  tsreader,
                      payload_unit_start_indicator);
       if (!show_data && payload_unit_start_indicator)
       {
-        print_data(TRUE,"  Data",payload,payload_len,20);
+        print_data(stdout,"  Data",payload,payload_len,20);
       }
 #if 0   // XXX
-        print_end_of_data("      ",payload,payload_len,20);
+        print_end_of_data(stdout,"      ",payload,payload_len,20);
 #endif
     }
   }
-  fprint_msg("Read %d TS packet%s\n",count,(count==1?"":"s"));
+  printf("Read %d TS packet%s\n",count,(count==1?"":"s"));
   free_pidint_list(&prog_list);
   free_pmt(&pmt);
   if (pmt_data) free(pmt_data);
@@ -1186,7 +953,7 @@ static int report_single_pid(TS_reader_p  tsreader,
 
     if (max > 0 && pid_count >= max)
     {
-      fprint_msg("Stopping after %d packets with PID %0x\n",max,just_pid);
+      printf("Stopping after %d packets with PID %0x\n",max,just_pid);
       break;
     }
 
@@ -1197,8 +964,8 @@ static int report_single_pid(TS_reader_p  tsreader,
       break;
     else if (err)
     {
-      fprint_err("### Error reading TS packet %d at " OFFSET_T_FORMAT
-                 "\n",count,tsreader->posn - TS_PACKET_SIZE);
+      KLOG("### Error reading TS packet %d at " OFFSET_T_FORMAT
+              "\n",count,tsreader->posn - TS_PACKET_SIZE);
       return 1;
     }
 
@@ -1211,28 +978,28 @@ static int report_single_pid(TS_reader_p  tsreader,
 
     if (!quiet)
     {
-      fprint_msg(OFFSET_T_FORMAT_8 ": TS Packet %2d PID %04x%s\n",
-                 tsreader->posn - TS_PACKET_SIZE,count,pid,
-                 (payload_unit_start_indicator?" [pusi]":""));
+      printf(OFFSET_T_FORMAT_8 ": TS Packet %2d PID %04x%s\n",
+             tsreader->posn - TS_PACKET_SIZE,count,pid,
+             (payload_unit_start_indicator?" [pusi]":""));
 
       if (adapt_len > 0)
-        print_data(TRUE,"    Adapt",adapt,adapt_len,adapt_len);
-      print_data(TRUE,  "  Payload",payload,payload_len,payload_len);
+        print_data(stdout,"    Adapt",adapt,adapt_len,adapt_len);
+      print_data(stdout,  "  Payload",payload,payload_len,payload_len);
     }
   }
-  fprint_msg("Read %d TS packet%s, %d with PID %0x\n",
-             count,(count==1?"":"s"),pid_count,just_pid);
+  printf("Read %d TS packet%s, %d with PID %0x\n",
+         count,(count==1?"":"s"),pid_count,just_pid);
   return 0;
 }
 
 static void print_usage()
 {
-  print_msg(
+  printf(
     "Usage: tsreport [switches] [<infile>] [switches]\n"
     "\n"
     );
   REPORT_VERSION("tsreport");
-  print_msg(
+  printf(
     "\n"
     "  Report on one of the following for the given Transport Stream:\n"
     "\n"
@@ -1250,8 +1017,6 @@ static void print_usage()
     "  By default, normal operation just reports the number of TS packets.\n"
     "  -timing, -t       Report timing information based on the PCRs.\n"
     "  -data             Show TS packet/payload data as bytes\n"
-    "  -err stdout       Write error messages to standard output (the default)\n"
-    "  -err stderr       Write error messages to standard error (Unix traditional)\n"
     "  -verbose, -v      Also output (fairly detailed) information on each TS packet.\n"
     "  -quiet, -q        Only output summary information (this is the default)\n"
     "  -max <n>, -m <n>  Maximum number of TS packets to read\n"
@@ -1259,8 +1024,7 @@ static void print_usage()
     "Buffering information:\n"
     "  -buffering, -b    Report on the differences between PCR and PTS, and\n"
     "                    between PCR and DTS. This is relevant to the size of\n"
-    "                    buffers needed in the decoder.  Also reports bitrates;\n"
-    "                    the max bitrate is calculated over 0.5sec\n"
+    "                    buffers needed in the decoder.\n"
     "  -o <file>         Output CSV data for -buffering to the named file.\n"
     "  -32               Truncate 33 bit values in the CSV output to 32 bits\n"
     "                    (losing the top bit).\n"
@@ -1271,8 +1035,6 @@ static void print_usage()
     "                    Writes all the values of the counter to a file called\n"
     "                    'continuity_counter.txt'. Turns buffering on (-b).\n"
     "  -max <n>, -m <n>  Maximum number of TS packets to read\n"
-    "  -prog <n>         Report on program <n> [default = 1]\n"
-    "                    (hopefully default will be 'all' in the future)\n"
     "\n"
     "Single PID:\n"
     "  -justpid <pid>    Just show data (file offset, index, adaptation field\n"
@@ -1314,7 +1076,6 @@ int main(int argc, char **argv)
   int       show_data = FALSE;
   char     *output_name = NULL;
   uint32_t  continuity_cnt_pid = INVALID_PID;
-  int       req_prog_no = 1;
 
   uint64_t  report_mask = ~0;   // report as many bits as we get
 
@@ -1345,22 +1106,6 @@ int main(int argc, char **argv)
         verbose = TRUE;
         quiet = FALSE;
       }
-      else if (!strcmp("-err",argv[ii]))
-      {
-        CHECKARG("tsreport",ii);
-        if (!strcmp(argv[ii+1],"stderr"))
-          redirect_output_stderr();
-        else if (!strcmp(argv[ii+1],"stdout"))
-          redirect_output_stdout();
-        else
-        {
-          fprint_err("### tsreport: "
-                     "Unrecognised option '%s' to -err (not 'stdout' or"
-                     " 'stderr')\n",argv[ii+1]);
-          return 1;
-        }
-        ii++;
-      }
       else if (!strcmp("-timing",argv[ii]) || !strcmp("-t",argv[ii]))
       {
         report_timing = TRUE;
@@ -1373,17 +1118,15 @@ int main(int argc, char **argv)
       }
       else if (!strcmp("-o",argv[ii]))
       {
-        CHECKARG("tsreport",ii);
         output_name = argv[ii+1];
         ii ++;
       }
       else if (!strcmp("-cnt",argv[ii]))
       {
-        CHECKARG("tsreport",ii);
         err = unsigned_value("tsreport",argv[ii],argv[ii+1],10,&continuity_cnt_pid);
         if (err) return 1;
-        fprint_msg("Reporting on continuity_counter for pid = %04x (%u)\n",
-                   continuity_cnt_pid,continuity_cnt_pid);
+        printf("Reporting on continuity_counter for pid = %04x (%u)\n",
+               continuity_cnt_pid,continuity_cnt_pid);
         report_buffering = TRUE;
         quiet = FALSE;
         ii ++;
@@ -1402,7 +1145,7 @@ int main(int argc, char **argv)
         CHECKARG("tsreport",ii);
         if ((tfmt_diff = fmtx_str_to_timestamp_flags(argv[ii + 1])) < 0)
         {
-          fprint_msg("### tsreport: Bad timestamp format '%s'\n",argv[ii+1]);
+          printf("### tsreport: Bad timestamp format '%s'\n",argv[ii+1]);
           return 1;
         }
         ii++;
@@ -1412,7 +1155,7 @@ int main(int argc, char **argv)
         CHECKARG("tsreport",ii);
         if ((tfmt_abs = fmtx_str_to_timestamp_flags(argv[ii + 1])) < 0)
         {
-          fprint_msg("### tsreport: Bad timestamp format '%s'\n",argv[ii+1]);
+          printf("### tsreport: Bad timestamp format '%s'\n",argv[ii+1]);
           return 1;
         }
         ii++;
@@ -1442,17 +1185,10 @@ int main(int argc, char **argv)
         use_stdin = TRUE;
         had_input_name = TRUE;  // so to speak
       }
-      else if (!strcmp("-prog",argv[ii]))
-      {
-        CHECKARG("tsreport",ii);
-        err = int_value("tsreport",argv[ii],argv[ii+1],TRUE,10,&req_prog_no);
-        if (err) return 1;
-        ii++;
-      }
       else
       {
-        fprint_err("### tsreport: "
-                   "Unrecognised command line switch '%s'\n",argv[ii]);
+        KLOG("### tsreport: "
+                "Unrecognised command line switch '%s'\n",argv[ii]);
         return 1;
       }
     }
@@ -1460,7 +1196,7 @@ int main(int argc, char **argv)
     {
       if (had_input_name)
       {
-        fprint_err("### tsreport: Unexpected '%s'\n",argv[ii]);
+        KLOG("### tsreport: Unexpected '%s'\n",argv[ii]);
         return 1;
       }
       else
@@ -1474,32 +1210,33 @@ int main(int argc, char **argv)
 
   if (!had_input_name)
   {
-    print_err("### tsreport: No input file specified\n");
+    KLOG("### tsreport: No input file specified\n");
     return 1;
   }
 
   err = open_file_for_TS_read((use_stdin?NULL:input_name),&tsreader);
   if (err)
   {
-    fprint_err("### tsreport: Unable to open input file %s for reading TS\n",
-               use_stdin?"<stdin>":input_name);
+    KLOG(
+            "### tsreport: Unable to open input file %s for reading TS\n",
+            use_stdin?"<stdin>":input_name);
     return 1;
   }
-  fprint_msg("Reading from %s\n",(use_stdin?"<stdin>":input_name));
+  printf("Reading from %s\n",(use_stdin?"<stdin>":input_name));
 
   if (max)
-    fprint_msg("Stopping after %d TS packets\n",max);
+    printf("Stopping after %d TS packets\n",max);
 
   if (select_pid)
     err = report_single_pid(tsreader,max,quiet,just_pid);
   else if (report_buffering)
-    err = report_buffering_stats(tsreader,req_prog_no,max,verbose,quiet,
+    err = report_buffering_stats(tsreader,max,verbose,quiet,
                                  output_name,continuity_cnt_pid,report_mask);
   else
     err = report_ts(tsreader,max,verbose,show_data,report_timing);
   if (err)
   {
-    print_err("### tsreport: Error reporting on input stream\n");
+    KLOG("### tsreport: Error reporting on input stream\n");
     (void) close_TS_reader(&tsreader);
     return 1;
   }

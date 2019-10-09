@@ -41,7 +41,6 @@
 #include "ts_fns.h"
 #include "tswrite_fns.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "pidint_fns.h"
 #include "pes_fns.h"
 
@@ -65,7 +64,6 @@ static int report_bad_reserved_bits = FALSE;
 //  and do I want it static? not if this ever becomes a
 //  library module...)
 static int continuity_counter[0x1fff+1] = {0};
-
 
 /*
  * Return the next value of continuity_counter for the given pid
@@ -240,8 +238,9 @@ static int write_TS_packet_parts(TS_writer_p output,
 
   if (total_len != TS_PACKET_SIZE)
   {
-    fprint_err("### TS packet length is %d, not 188 (composed of %d + %d + %d)\n",
-               total_len,TS_hdr_len,pes_hdr_len,data_len);
+    KLOG(
+            "### TS packet length is %d, not 188 (composed of %d + %d + %d)\n",
+            total_len,TS_hdr_len,pes_hdr_len,data_len);
     return 1;
   }
 
@@ -256,7 +255,7 @@ static int write_TS_packet_parts(TS_writer_p output,
   err = tswrite_write(output,TS_packet,pid,got_pcr,pcr);
   if (err)
   {
-    fprint_err("### Error writing out TS packet: %s\n",strerror(errno));
+    //KLOG("### Error writing out TS packet: %s\n",strerror(errno));
     return 1;
   }
   return 0;
@@ -310,7 +309,7 @@ static int write_some_TS_PES_packet(TS_writer_p  output,
 
   if (pid < 0x0010 || pid > 0x1ffe)
   {
-    fprint_err("### PID %03x is outside legal program stream range",pid);
+    KLOG("### PID %03x is outside legal program stream range",pid);
     return 1;
   }
 
@@ -327,10 +326,10 @@ static int write_some_TS_PES_packet(TS_writer_p  output,
 
 #if DEBUG_THIS
   if (start)
-    print_msg("TS_PES ");
+    printf("TS_PES ");
   else
-    print_msg("       ");
-  print_data(TRUE,"",data,data_len,20);
+    printf("       ");
+  print_data(stdout,"",data,data_len,20);
 #endif
 
   // We always start with a sync_byte to identify this as a
@@ -364,7 +363,7 @@ static int write_some_TS_PES_packet(TS_writer_p  output,
     space_left = MAX_TS_PAYLOAD_SIZE - 8;
     got_adaptation_field = TRUE;
 #if DEBUG_THIS
-    fprint_msg("       start & got_PCR -> with adaptation field, space left %d, TS_packet[4] %d\n",space_left,TS_packet[4]);
+    printf("       start & got_PCR -> with adaptation field, space left %d, TS_packet[4] %d\n",space_left,TS_packet[4]);
 #endif
   }
   else if (pes_data_len < MAX_TS_PAYLOAD_SIZE)
@@ -389,7 +388,7 @@ static int write_some_TS_PES_packet(TS_writer_p  output,
     }
     got_adaptation_field = TRUE;
 #if DEBUG_THIS
-    fprint_msg("       <184, pad with empty adaptation field, space left %d, TS_packet[4] %d\n",space_left,TS_packet[4]);
+    printf("       <184, pad with empty adaptation field, space left %d, TS_packet[4] %d\n",space_left,TS_packet[4]);
 #endif
   }
   else
@@ -402,7 +401,7 @@ static int write_some_TS_PES_packet(TS_writer_p  output,
     TS_hdr_len = 4;
     space_left = MAX_TS_PAYLOAD_SIZE;
 #if DEBUG_THIS
-    fprint_msg("       >=184, space left %d\n",space_left);
+    printf("       >=184, space left %d\n",space_left);
 #endif
   }
 
@@ -419,7 +418,7 @@ static int write_some_TS_PES_packet(TS_writer_p  output,
       TS_hdr_len   += padlen;
       space_left   -= padlen;
 #if DEBUG_THIS
-      fprint_msg("       stuffing %d, space left %d, TS_packet[4] %d\n",padlen,space_left,TS_packet[4]);
+      printf("       stuffing %d, space left %d, TS_packet[4] %d\n",padlen,space_left,TS_packet[4]);
 #endif
     }
   }
@@ -427,7 +426,7 @@ static int write_some_TS_PES_packet(TS_writer_p  output,
   if (pes_data_len == space_left)
   {
 #if DEBUG_THIS
-    print_msg("       == fits exactly\n");
+    printf("       == fits exactly\n");
 #endif
     // Our data fits exactly
     err = write_TS_packet_parts(output,
@@ -449,7 +448,7 @@ static int write_some_TS_PES_packet(TS_writer_p  output,
                                 pid,got_PCR,(PCR_base*300)+PCR_extn);
     if (err) return err;
 #if DEBUG_THIS
-    fprint_msg("       == wrote %d, leaving %d\n",increment,data_len-increment);
+    printf("       == wrote %d, leaving %d\n",increment,data_len-increment);
 #endif
     // Leaving data_len - (184-pes_hdr_len) bytes still to go
     // Is recursion going to be efficient enough?
@@ -492,7 +491,7 @@ extern int write_ES_as_TS_PES_packet(TS_writer_p output,
   int     pes_hdr_len = 0;
 
 #if DEBUG_WRITE_PACKETS
-  fprint_msg("||  ES as TS/PES, pid %x (%d)\n",pid,pid);
+  printf("||  ES as TS/PES, pid %x (%d)\n",pid,pid);
 #endif
   
   PES_header(data_len,stream_id,FALSE,0,FALSE,0,pes_hdr,&pes_hdr_len);
@@ -549,7 +548,7 @@ extern int write_ES_as_TS_PES_packet_with_pts_dts(TS_writer_p output,
   int     pes_hdr_len = 0;
 
 #if DEBUG_WRITE_PACKETS
-  fprint_msg("||  ES as TS/PES with PTS/DTS, pid %x (%d)\n",pid,pid);
+  printf("||  ES as TS/PES with PTS/DTS, pid %x (%d)\n",pid,pid);
 #endif
 
   PES_header(data_len,stream_id,got_pts,pts,got_dts,dts,pes_hdr,&pes_hdr_len);
@@ -590,7 +589,7 @@ extern int write_ES_as_TS_PES_packet_with_pcr(TS_writer_p output,
   int     pes_hdr_len = 0;
 
 #if DEBUG_WRITE_PACKETS
-  fprint_msg("||  ES as TS/PES with PCR, pid %x (%d)\n",pid,pid);
+  printf("||  ES as TS/PES with PCR, pid %x (%d)\n",pid,pid);
 #endif
 
   PES_header(data_len,stream_id,FALSE,0,FALSE,0,pes_hdr,&pes_hdr_len);
@@ -635,12 +634,12 @@ extern int write_PES_as_TS_PES_packet(TS_writer_p output,
 #define MPEG1_AS_ES       1
 
 #if DEBUG_WRITE_PACKETS
-  fprint_msg("|| PES as TS/PES, pid %x (%d)\n",pid,pid);
+  printf("|| PES as TS/PES, pid %x (%d)\n",pid,pid);
 #endif
 
 #if 0   // XXX
-  print_data(TRUE,"TS_PES",data,data_len,20);
-  print_end_of_data("      ",data,data_len,20);
+  print_data(stdout,"TS_PES",data,data_len,20);
+  print_end_of_data(stdout,"      ",data,data_len,20);
 #endif  // XXX
 
 #if MPEG1_AS_ES
@@ -700,8 +699,8 @@ static int TS_program_packet_hdr(uint32_t pid,
 
   if (data_len > (TS_PACKET_SIZE - 5))  // i.e., 183
   {
-    fprint_err("### PMT/PAT data for PID %02x is too long (%d > 183)",
-               pid,data_len);
+    KLOG("### PMT/PAT data for PID %02x is too long (%d > 183)",
+            pid,data_len);
     return 1;
   }
   
@@ -886,13 +885,13 @@ extern int write_pat(TS_writer_p    output,
   uint32_t crc32;
 
 #if DEBUG_WRITE_PACKETS
-  print_msg("|| PAT pid 0\n");
+  printf("|| PAT pid 0\n");
 #endif
 
   section_length = 9 + prog_list->length * 4;
   if (section_length > 1021)
   {
-    print_err("### PAT data is too long - will not fit in 1021 bytes\n");
+    KLOG("### PAT data is too long - will not fit in 1021 bytes\n");
     // TODO: Ideally, would be to stderr
     report_pidint_list(prog_list,"Program list","Program",FALSE);
     return 1;
@@ -931,8 +930,8 @@ extern int write_pat(TS_writer_p    output,
 #if 1
   if (data_length != section_length + 3)
   {
-    fprint_err("### PAT length %d, section length+3 %d\n",
-               data_length,section_length+3);
+    KLOG("### PAT length %d, section length+3 %d\n",
+	    data_length,section_length+3);
     return 1;
   }
 #endif
@@ -940,20 +939,20 @@ extern int write_pat(TS_writer_p    output,
   crc32 = crc32_block(0xffffffff,data,data_length);
   if (crc32 != 0)
   {
-    print_err("### PAT CRC does not self-cancel\n");
+    KLOG("### PAT CRC does not self-cancel\n");
     return 1;
   }
   err = TS_program_packet_hdr(0x00,data_length,TS_packet,&TS_hdr_len);
   if (err)
   {
-    print_err("### Error constructing PAT packet header\n");
+    KLOG("### Error constructing PAT packet header\n");
     return 1;
   }
   err = write_TS_packet_parts(output,TS_packet,TS_hdr_len,NULL,0,
                               data,data_length,0x00,FALSE,0);
   if (err)
   {
-    print_err("### Error writing PAT\n");
+    KLOG("### Error writing PAT\n");
     return 1;
   }
   return 0;
@@ -982,18 +981,18 @@ extern int write_pmt(TS_writer_p output,
   uint32_t crc32;
 
 #if DEBUG_WRITE_PACKETS
-  fprint_msg("|| PMT pid %x (%d)\n",pmt_pid,pmt_pid);
+  printf("|| PMT pid %x (%d)\n",pmt_pid,pmt_pid);
 #endif
 
   if (pmt_pid < 0x0010 || pmt_pid > 0x1ffe)
   {
-    fprint_err("### PMT PID %03x is outside legal range\n",pmt_pid);
+    KLOG("### PMT PID %03x is outside legal range\n",pmt_pid);
     return 1;
   }
   if (pid_in_pmt(pmt,pmt_pid))
   {
-    fprint_err("### PMT PID and program %d PID are both %03x\n",
-               pid_index_in_pmt(pmt,pmt_pid),pmt_pid);
+    KLOG("### PMT PID and program %d PID are both %03x\n",
+	    pid_index_in_pmt(pmt,pmt_pid),pmt_pid);
     return 1;
   }
 
@@ -1005,8 +1004,8 @@ extern int write_pmt(TS_writer_p output,
     section_length += 5 + pmt->streams[ii].ES_info_length;
   if (section_length > 1021)
   {
-    print_err("### PMT data is too long - will not fit in 1021 bytes\n");
-    report_pmt(FALSE,"    ",pmt);
+    KLOG("### PMT data is too long - will not fit in 1021 bytes\n");
+    report_pmt(stderr,"    ",pmt);
     return 1;
   }
 
@@ -1050,8 +1049,8 @@ extern int write_pmt(TS_writer_p output,
 #if 1
   if (data_length != section_length + 3)
   {
-    fprint_err("### PMT length %d, section length+3 %d\n",
-               data_length,section_length+3);
+    KLOG("### PMT length %d, section length+3 %d\n",
+	    data_length,section_length+3);
     return 1;
   }
 #endif
@@ -1059,20 +1058,20 @@ extern int write_pmt(TS_writer_p output,
   crc32 = crc32_block(0xffffffff,data,data_length);
   if (crc32 != 0)
   {
-    print_err("### PMT CRC does not self-cancel\n");
+    KLOG("### PMT CRC does not self-cancel\n");
     return 1;
   }
   err = TS_program_packet_hdr(pmt_pid,data_length,TS_packet,&TS_hdr_len);
   if (err)
   {
-    print_err("### Error constructing PMT packet header\n");
+    KLOG("### Error constructing PMT packet header\n");
     return 1;
   }
   err = write_TS_packet_parts(output,TS_packet,TS_hdr_len,NULL,0,
                               data,data_length,0x02,FALSE,0);
   if (err)
   {
-    print_err("### Error writing PMT\n");
+    KLOG("### Error writing PMT\n");
     return 1;
   }
   return 0;
@@ -1155,7 +1154,7 @@ extern int write_TS_null_packet(TS_writer_p output)
   int    err, ii;
 
 #if DEBUG_WRITE_PACKETS
-  print_msg("|| Null packet\n");
+  printf("|| Null packet\n");
 #endif
 
   TS_packet[0] = 0x47;
@@ -1169,7 +1168,7 @@ extern int write_TS_null_packet(TS_writer_p output)
                               0x1FF,FALSE,0);
   if (err)
   {
-    print_err("### Error writing null TS packet\n");
+    KLOG("### Error writing null TS packet\n");
     return 1;
   }
   return 0;
@@ -1193,48 +1192,28 @@ static uint64_t TWENTY_SEVEN_MHZ = 27000000;
  *
  * Returns 0 if all goes well, 1 if something goes wrong.
  */
-static int new_TS_reader(TS_reader_p  *tsreader)
+extern int build_TS_reader(int           file,
+                           TS_reader_p  *tsreader)
 {
   TS_reader_p new = malloc(SIZEOF_TS_READER);
   if (new == NULL)
   {
-    print_err("### Unable to allocate TS read-ahead buffer\n");
+    KLOG("### Unable to allocate TS read-ahead buffer\n");
     return 1;
   }
 
   memset(new, '\0', SIZEOF_TS_READER);
 
-  new->file = -1;
-
-  *tsreader = new;
-  return 0;
-}
-
-// ------------------------------------------------------------
-// File handling
-// ------------------------------------------------------------
-/*
- * Build a TS packet reader, including its read-ahead buffer
- *
- * - `file` is the file that the TS packets will be read from.
- *   It is assumed that its read position is at its start.
- *
- * Returns 0 if all goes well, 1 if something goes wrong.
- */
-extern int build_TS_reader(int           file,
-                           TS_reader_p  *tsreader)
-{
-  TS_reader_p new;
-  int err = new_TS_reader(&new);
-  if (err) return 1;
-
   new->file = file;
+  new->posn = 0;
+  new->read_ahead_ptr = NULL;
+  new->read_ahead_end = NULL;
 
   *tsreader = new;
   return 0;
 }
 
-
+
 /*
  * Build a TS packet reader using the given functions as read() and seek().
  *
@@ -1245,13 +1224,22 @@ extern int build_TS_reader_with_fns(void *handle,
                                     int (*seek_fn)(void *, offset_t), 
                                     TS_reader_p *tsreader)
 {
-  TS_reader_p new;
-  int err = new_TS_reader(&new);
-  if (err) return 1;
+  TS_reader_p new = malloc(SIZEOF_TS_READER);
+  if (new == NULL)
+  {
+    KLOG("### Unable to allocate TS read-ahead buffer\n");
+    return 1;
+  }
 
+  memset(new, '\0', SIZEOF_TS_READER);
+
+  new->file = -1;
   new->handle = handle;
   new->read_fn = read_fn;
   new->seek_fn = seek_fn;
+  new->posn = 0;
+  new->read_ahead_ptr = NULL;
+  new->read_ahead_end = NULL;
 
   *tsreader = new;
   return 0;
@@ -1298,8 +1286,6 @@ extern void free_TS_reader(TS_reader_p  *tsreader)
 {
   if (*tsreader != NULL)
   {
-    if ((*tsreader)->pcrbuf != NULL)
-      free((*tsreader)->pcrbuf);
     (*tsreader)->file = -1;
     free(*tsreader);
     *tsreader = NULL;
@@ -1321,8 +1307,9 @@ extern int close_TS_reader(TS_reader_p  *tsreader)
     return 0;
   if ((*tsreader)->file != STDIN_FILENO && (*tsreader)->file != -1)
     err = close_file((*tsreader)->file);
-
-  free_TS_reader(tsreader);
+  (*tsreader)->file = -1;
+  free(*tsreader);
+  *tsreader = NULL;
   return err;
 }
 
@@ -1385,9 +1372,6 @@ static int read_next_TS_packets(TS_reader_p  tsreader,
   ssize_t length;
 #endif
 
-  // If we exit with an error make sure we don't return anything valid here!
-  *packet = NULL;
-
   if (tsreader->read_ahead_ptr == tsreader->read_ahead_end)
   {
     // Try to allow for partial reads
@@ -1398,15 +1382,14 @@ static int read_next_TS_packets(TS_reader_p  tsreader,
                                    &(tsreader->read_ahead[total]),
                                    TS_READ_AHEAD_BYTES-total);
       else
-        length = read(tsreader->file,
+        length = read(tsreader->file,                       /*  MMM */
                       &(tsreader->read_ahead[total]),
                       TS_READ_AHEAD_BYTES - total);
-
       if (length == 0)  // EOF - no more data to read
         break;
       else if (length == -1)
       {
-        fprint_err("### Error reading TS packets: %s\n",strerror(errno));
+        KLOG("### Error reading TS packets: %s\n",strerror(errno));
         return 1;
       }
       total += length;
@@ -1420,9 +1403,11 @@ static int read_next_TS_packets(TS_reader_p  tsreader,
 
     if (total % TS_PACKET_SIZE != 0)
     {
-      fprint_err("!!! %d byte%s ignored at end of file - not enough"
-                 " to make a TS packet\n",
-                 (int)(total % TS_PACKET_SIZE),(total % TS_PACKET_SIZE == 1?"":"s"));
+      /*
+      KLOG("!!! %d byte%s ignored at end of file - not enough"
+              " to make a TS packet\n",
+              (int)(total % TS_PACKET_SIZE),(total % TS_PACKET_SIZE == 1?"":"s"));
+      */
       // Retain whatever full packets we *do* have
       total = total - (total % TS_PACKET_SIZE);
       if (total == 0)
@@ -1502,28 +1487,46 @@ extern int read_next_TS_packet(TS_reader_p  tsreader,
 // it will be left as-is until something more sophisticated is
 // needed
 
-
-/* Make sure we've got a PCR buffer allocated, and that
- * its content is entirely unset (so this also serves as
- * a "reset" function).
- *
- * Returns 0 if all went well, 1 if something went wrong.
- */
-static int start_TS_packet_buffer(TS_reader_p  tsreader)
-{
-  if (tsreader->pcrbuf == NULL)
-  {
-    tsreader->pcrbuf = malloc(SIZEOF_TS_PCR_BUFFER);
-    if (tsreader->pcrbuf == NULL)
-    {
-      print_err("### Unable to allocate TS PCR read-ahead buffer\n");
-      return 1;
-    }
-  }
-  memset(tsreader->pcrbuf, '\0', SIZEOF_TS_PCR_BUFFER);
-  return 0;
-}
-
+// Let's guess for a maximum number of TS entries we're likely to need
+// to be able to hold...
+// XXX
+// XXX But whatever number we guess here will be too small for some
+// XXX streams, or so big it's really quite over the top for most
+// XXX (and more than I'd like). So maybe we should have something
+// XXX that's likely to cope for most streams, and we should (ideally)
+// XXX have a way for the user to set the size with a swich, but also
+// XXX (perhaps) we should allow the reader to continue (using the last
+// XXX calculated rate) if we can't read ahead? Or perhaps having the
+// XXX switch is enough, for the nonce... Or maybe we should allow the
+// XXX buffer to grow (on demand, within some sort of reason) if it
+// XXX needs to.
+// XXX
+#define PCR_READ_AHEAD_SIZE     100000 //KDKD 20000     // a made-up number
+static byte     TS_buffer[PCR_READ_AHEAD_SIZE][TS_PACKET_SIZE];
+// For convenience (since we'll already have calculated this once),
+// remember each packets PID
+static uint32_t TS_buffer_pids[PCR_READ_AHEAD_SIZE];
+// And the PCR PID we're looking for (we have to assume that's fairly
+// static, or we couldn't do read-aheads and interpolations)
+static uint32_t TS_buffer_pcr_pid = 0;
+// The number of TS entries we've got therein, the *last* of which
+// has a PCR
+static int      TS_buffer_len = 0;
+// Which TS packet we should read next...
+static int      TS_buffer_next = 0;
+// The PCR of that last entry
+static uint64_t TS_buffer_end_pcr = 0;
+// And the PCR of the *previous* last entry
+static uint64_t TS_buffer_prev_pcr = 0;
+// From which, we can deduce the time per packet
+static uint64_t TS_buffer_time_per_TS = 0;
+// For diagnostic purposes, the sequence number of TS_buffer[0]
+// (and thus, of the overall read-ahead buffer) in the overall file
+static int      TS_buffer_posn = 0;
+// Did we read an EOF before finding a "second" PCR?
+// (perhaps we should instead call this "TS_playing_out", but that's
+// less directly named from how we set it)
+static int      TS_had_EOF = FALSE;
 
 /* Fill up the PCR read-ahead buffer with TS entries, until we hit
  * one (of the correct PID) with a PCR.
@@ -1533,12 +1536,13 @@ static int start_TS_packet_buffer(TS_reader_p  tsreader)
 static int fill_TS_packet_buffer(TS_reader_p  tsreader)
 {
   int ii;
+  int iii = 0;
 
   // Work out which TS packet we *will* have as our first (zeroth) entry
-  tsreader->pcrbuf->TS_buffer_posn += tsreader->pcrbuf->TS_buffer_len;
+  TS_buffer_posn = TS_buffer_posn + TS_buffer_len + 1;
 
-  tsreader->pcrbuf->TS_buffer_len = 0;
-  tsreader->pcrbuf->TS_buffer_next = 0;
+  TS_buffer_len = 0;
+  TS_buffer_next = 0;
   for (ii=0; ii<PCR_READ_AHEAD_SIZE; ii++)
   {
     byte    *data;
@@ -1564,74 +1568,62 @@ static int fill_TS_packet_buffer(TS_reader_p  tsreader)
       }
       else
       {
-        fprint_err("### Error (pre)reading TS packet %d\n",
-                   tsreader->pcrbuf->TS_buffer_posn+ii);
+        KLOG("### Error (pre)reading TS packet %d\n",TS_buffer_posn+ii);
         return 1;
       }
     }
 
     // Copy the data into our own read-ahead buffer
-    memcpy(tsreader->pcrbuf->TS_buffer[ii],data,TS_PACKET_SIZE);
+    memcpy(TS_buffer[ii],data,TS_PACKET_SIZE);
 
     err = split_TS_packet(data,&pid,&payload_unit_start_indicator,
                           &adapt,&adapt_len,&payload,&payload_len);
     if (err)
     {
-      fprint_err("### Error splitting TS packet %d\n",
-                 tsreader->pcrbuf->TS_buffer_posn+ii);
+      KLOG("### Error splitting TS packet %d\n",TS_buffer_posn+ii);
       return 1;
     }
-    tsreader->pcrbuf->TS_buffer_len ++;
+    TS_buffer_len ++;
 
-    if (pid != tsreader->pcrbuf->TS_buffer_pcr_pid)
+    if (pid != TS_buffer_pcr_pid)
       continue;                 // don't care about any PCR it might have
 
     get_PCR_from_adaptation_field(adapt,adapt_len,&got_pcr,&pcr);
     if (got_pcr)
     {
-      tsreader->pcrbuf->TS_buffer_prev_pcr = tsreader->pcrbuf->TS_buffer_end_pcr;
-      tsreader->pcrbuf->TS_buffer_end_pcr = pcr;
-      tsreader->pcrbuf->TS_buffer_time_per_TS =
-        pcr_unsigned_diff(tsreader->pcrbuf->TS_buffer_end_pcr, tsreader->pcrbuf->TS_buffer_prev_pcr) /
-                                                tsreader->pcrbuf->TS_buffer_len;
+		iii = ii;
+      TS_buffer_prev_pcr = TS_buffer_end_pcr;
+      TS_buffer_end_pcr = pcr;
+      TS_buffer_time_per_TS = (TS_buffer_end_pcr - TS_buffer_prev_pcr) / TS_buffer_len;
+	  //if(got_pcr==TRUE) // KDKD
+	  //	KLOG("in %d PCR:%lld \n",TS_buffer_posn+ii,pcr); 
       return 0;
     }
+	if(got_pcr==FALSE && (iii - ii)>100 )
+    {
+		
+  	  iii = ii;
+      TS_buffer_prev_pcr = TS_buffer_end_pcr;
+      TS_buffer_end_pcr = pcr;
+      TS_buffer_time_per_TS = (TS_buffer_end_pcr - TS_buffer_prev_pcr) / TS_buffer_len;
+	  KLOG("ADD in %d PCR:%lld \n",TS_buffer_posn+ii,pcr); 
+      return 0;
+    }
+
   }
   // If we ran out of buffer, then we've really got no choice but to give up
   // with an appropriate grumble
-  fprint_err("!!! Next PCR not found when reading forwards"
-             " (for %d TS packets, starting at TS packet %d)\n",PCR_READ_AHEAD_SIZE,
-             tsreader->pcrbuf->TS_buffer_posn);
+  KLOG("!!! Next PCR not found when reading forwards"
+          " (for %d TS packets, starting at TS packet %d)\n",PCR_READ_AHEAD_SIZE,
+          TS_buffer_posn);
   return 1;
-}
-
-/* Set up the the "looping" buffered TS packet reader and let it know what its
- * PCR PID is.
- *
- * This must be called before any other _buffered_TS_packet function.
- *
- * - `pcr_pid` is the PID within which we should look for PCR entries
- *
- * Returns 0 if all went well, 1 if something went wrong (allocating space
- * for the TS PCR buffer).
- */
-extern int prime_read_buffered_TS_packet(TS_reader_p  tsreader,
-                                         uint32_t     pcr_pid)
-{
-  if (start_TS_packet_buffer(tsreader))
-    return 1;
-  tsreader->pcrbuf->TS_buffer_pcr_pid = pcr_pid;
-  return 0;
 }
 
 /* Retrieve the first TS packet from the PCR read-ahead buffer,
  * complete with its calculated PCR time.
  *
- * prime_read_buffered_TS_packet() must have been called before this.
- *
  * This should be called the first time a TS packet is to be read
- * using the PCR read-ahead buffer. It "primes" the read-ahead mechanism
- * by performing the first actual read-ahead.
+ * using the PCR read-ahead buffer. It "primes" the read-ahead mechanism.
  *
  * - `pcr_pid` is the PID within which we should look for PCR entries
  * - `start_count` is the index of the current (last read) TS entry (which will
@@ -1658,21 +1650,14 @@ extern int read_first_TS_packet_from_buffer(TS_reader_p  tsreader,
 {
   int err;
 
-  if (tsreader->pcrbuf == NULL)
-  {
-    print_err("### TS PCR read-ahead buffer has not been set up\n"
-              "    Make sure prime_read_buffered_TS_packet() has been called\n");
-    return 1;
-  }
-
-  // Reset things
-  tsreader->pcrbuf->TS_buffer_next = 0;
-  tsreader->pcrbuf->TS_buffer_end_pcr = 0;
-  tsreader->pcrbuf->TS_buffer_prev_pcr = 0;
-  tsreader->pcrbuf->TS_buffer_posn = start_count;
-  tsreader->pcrbuf->TS_buffer_len = 0;
-  tsreader->pcrbuf->TS_buffer_pcr_pid = pcr_pid;
-  tsreader->pcrbuf->TS_had_EOF = FALSE;
+  // Reset ourselves
+  TS_buffer_next = 0;
+  TS_buffer_end_pcr = 0;
+  TS_buffer_prev_pcr = 0;
+  TS_buffer_posn = start_count;
+  TS_buffer_len = 0;                // this (+1) gets added to TS_buffer_posn
+  TS_buffer_pcr_pid = pcr_pid;
+  TS_had_EOF = FALSE;
 
   // Read TS packets into our buffer until we find one with a PCR
   err = fill_TS_packet_buffer(tsreader);
@@ -1680,17 +1665,17 @@ extern int read_first_TS_packet_from_buffer(TS_reader_p  tsreader,
 
   // However, it's only the last packet (the one with the PCR) that
   // we are actually interested in
-  tsreader->pcrbuf->TS_buffer_next = tsreader->pcrbuf->TS_buffer_len - 1;
+  TS_buffer_next = TS_buffer_len - 1;
 
   // Why, this is the very packet with its own PCR
-  *pcr = tsreader->pcrbuf->TS_buffer_end_pcr;
+  *pcr = TS_buffer_end_pcr;
 
-  *data = tsreader->pcrbuf->TS_buffer[tsreader->pcrbuf->TS_buffer_next];
-  *pid = tsreader->pcrbuf->TS_buffer_pids[tsreader->pcrbuf->TS_buffer_next];
+  *data = TS_buffer[TS_buffer_next];
+  *pid = TS_buffer_pids[TS_buffer_next];
 
-  *count = start_count + tsreader->pcrbuf->TS_buffer_len;
+  *count = start_count + TS_buffer_len;
 
-  tsreader->pcrbuf->TS_buffer_next ++;
+  TS_buffer_next ++;
   return 0;
 }
 
@@ -1709,22 +1694,30 @@ extern int read_first_TS_packet_from_buffer(TS_reader_p  tsreader,
  * Returns 0 if all went well, 1 if something went wrong, EOF if EOF was read.
  */
 extern int read_next_TS_packet_from_buffer(TS_reader_p  tsreader,
-                                           byte        *data[TS_PACKET_SIZE],
-                                           uint32_t    *pid,
-                                           uint64_t    *pcr)
+                                   byte        *data[TS_PACKET_SIZE],
+                                   uint32_t    *pid,
+                                   uint64_t    *pcr,
+                                   int *play_forward,int *play_backward)
 {
+#define FSTEP 30000
   int err;
-
-  if (tsreader->pcrbuf == NULL)
-  {
-    print_err("### TS PCR read-ahead buffer has not been set up\n"
-              "    Make sure read_first_TS_packet_from_buffer() has been called\n");
-    return 1;
+  if(*play_forward == 1){
+    if(TS_buffer_next+FSTEP>TS_buffer_len)
+        TS_buffer_next = TS_buffer_len;
+    else
+        TS_buffer_next += FSTEP;
+    *play_forward = 0;
   }
-
-  if (tsreader->pcrbuf->TS_buffer_next == tsreader->pcrbuf->TS_buffer_len)
+  if(*play_backward == 1){
+    if(TS_buffer_next-FSTEP<0)
+        TS_buffer_next = 0;
+    else
+        TS_buffer_next -= FSTEP;
+    *play_backward = 0;
+  }
+  if (TS_buffer_next == TS_buffer_len)
   {
-    if (tsreader->pcrbuf->TS_had_EOF)
+    if (TS_had_EOF)
     {
       // We'd already run out of look-ahead packets, so just return
       // our (deferred) end-of-file
@@ -1742,45 +1735,45 @@ extern int read_next_TS_packet_from_buffer(TS_reader_p  tsreader,
         // at the end of the file. This proved unacceptable in practice,
         // so our second best choice is to "play out" using the last
         // known PCR rate-of-change.
-        tsreader->pcrbuf->TS_had_EOF = TRUE;              // remember we're playing out
-        // Must move PCR start
-        tsreader->pcrbuf->TS_buffer_prev_pcr = tsreader->pcrbuf->TS_buffer_end_pcr;
-        // If we read nothing we must die now
-        if (tsreader->pcrbuf->TS_buffer_next == tsreader->pcrbuf->TS_buffer_len)
-          return err;
+        TS_had_EOF = TRUE;              // remember we're playing out
       }
       else if (err)
         return err;
     }
   }
 
-  *data = tsreader->pcrbuf->TS_buffer[tsreader->pcrbuf->TS_buffer_next];
-  *pid = tsreader->pcrbuf->TS_buffer_pids[tsreader->pcrbuf->TS_buffer_next];
+  *data = TS_buffer[TS_buffer_next];
+  *pid = TS_buffer_pids[TS_buffer_next];
 
-  tsreader->pcrbuf->TS_buffer_next ++;
+  TS_buffer_next ++;
 
-  if (tsreader->pcrbuf->TS_buffer_next == tsreader->pcrbuf->TS_buffer_len &&
-      !tsreader->pcrbuf->TS_had_EOF)
+  if (TS_buffer_next == TS_buffer_len && !TS_had_EOF)
   {
     // Why, this is the very packet with its own PCR
-    *pcr = tsreader->pcrbuf->TS_buffer_end_pcr;
+    *pcr = TS_buffer_end_pcr;
   }
   else
   {
-    *pcr = pcr_unsigned_wrap(tsreader->pcrbuf->TS_buffer_prev_pcr +
-           tsreader->pcrbuf->TS_buffer_time_per_TS *
-           tsreader->pcrbuf->TS_buffer_next);
+    *pcr = TS_buffer_prev_pcr + TS_buffer_time_per_TS * TS_buffer_next;
   }
   return 0;
+}
+
+/* Let the "looping" buffered TS packet reader know what its PCR PID is
+ *
+ * Call this before the first call of read_buffered_TS_packet().
+ *
+ * - `pcr_pid` is the PID within which we should look for PCR entries
+ */
+extern void prime_read_buffered_TS_packet(uint32_t     pcr_pid)
+{
+  TS_buffer_pcr_pid = pcr_pid;
 }
 
 /*
  * Read the next TS packet, coping with looping, etc.
  *
  * prime_read_buffered_TS_packet() should have been called first.
- *
- * This is a convenience wrapper around read_first_TS_packet_from_buffer()
- * and read_next_TS_packet_from_buffer().
  *
  * This differs from ``read_TS_packet`` in that it assumes that the
  * underlying code will already have read to the next PCR, so that
@@ -1812,7 +1805,8 @@ extern int read_buffered_TS_packet(TS_reader_p  tsreader,
                                    int          loop,
                                    offset_t     start_posn,
                                    uint32_t     start_count,
-                                   int          quiet)
+                                   int          quiet,
+                                   int *play_forward,int *play_backward)
 {
   int     err;
 
@@ -1821,14 +1815,14 @@ extern int read_buffered_TS_packet(TS_reader_p  tsreader,
     if (loop)
     {
       if (!quiet)
-        fprint_msg("Read %d packets, rewinding and continuing\n",max);
+        printf("Read %d packets, rewinding and continuing\n",max);
       err = seek_using_TS_reader(tsreader,start_posn);
       if (err) return 1;
       *count = start_count;
     }
     else
     {
-      if (!quiet) fprint_msg("Stopping after %d TS packets\n",max);
+      if (!quiet) printf("Stopping after %d TS packets\n",max);
       return EOF;
     }
   }
@@ -1845,27 +1839,26 @@ extern int read_buffered_TS_packet(TS_reader_p  tsreader,
     // XXX the first packet with a PCR? Probably more so than that we
     // XXX should ignore any packets at the end of the file.
     // XXX
-    err = read_first_TS_packet_from_buffer(tsreader,
-                                           tsreader->pcrbuf->TS_buffer_pcr_pid,
+    err = read_first_TS_packet_from_buffer(tsreader,TS_buffer_pcr_pid,
                                            start_count,data,pid,pcr,count);
     if (err)
     {
       if (err == EOF)
       {
-        print_err("### EOF looking for first PCR\n");
+        KLOG("### EOF looking for first PCR\n");
         return 1;
       }
       else
       {
-        fprint_err("### Error reading TS packet %d, looking for first PCR\n",
-                   *count);
+        KLOG("### Error reading TS packet %d, looking for first PCR\n",
+                *count);
         return 1;
       }
     }
   }
   else
   {
-    err = read_next_TS_packet_from_buffer(tsreader,data,pid,pcr);
+    err = read_next_TS_packet_from_buffer(tsreader,data,pid,pcr,play_forward,play_backward);
     if (err)
     {
       if (err == EOF)
@@ -1873,27 +1866,26 @@ extern int read_buffered_TS_packet(TS_reader_p  tsreader,
         if (!loop)
           return EOF;
         if (!quiet)
-          fprint_msg("EOF (after %d TS packets), rewinding and continuing\n",
-                     *count);
+          printf("EOF (after %d TS packets), rewinding and continuing\n",
+                 *count);
       }
       else
       {
-        fprint_err("### Error reading TS packet %d\n",*count);
+        KLOG("### Error reading TS packet %d\n",*count);
         if (!loop)
           return 1;
         if (!quiet)
-          print_msg("!!! Rewinding and continuing anyway\n");
+          printf("!!! Rewinding and continuing anyway\n");
       }
       err = seek_using_TS_reader(tsreader,start_posn);
       if (err) return 1;
 
       *count = start_count;
-      err = read_first_TS_packet_from_buffer(tsreader,
-                                             tsreader->pcrbuf->TS_buffer_pcr_pid,
+      err = read_first_TS_packet_from_buffer(tsreader,TS_buffer_pcr_pid,
                                              start_count,data,pid,pcr,count);
       if (err)
       {
-        print_err("### Failed rewinding\n");
+        KLOG("### Failed rewinding\n");
         return 1;
       }
     }
@@ -1956,25 +1948,25 @@ extern void report_adaptation_field(byte        adapt[],
   if (adapt_len == 0 || adapt == NULL)
     return;
 
-  fprint_msg("  Adaptation field len %3d [flags %02x]",adapt_len,adapt[0]);
+  printf("  Adaptation field len %3d [flags %02x]",adapt_len,adapt[0]);
   if (adapt[0] != 0)
   {
-    print_msg(":");
-    if (ON(adapt[0],0x80)) print_msg(" discontinuity ");
-    if (ON(adapt[0],0x40)) print_msg(" random access ");
-    if (ON(adapt[0],0x20)) print_msg(" ES-priority ");
-    if (ON(adapt[0],0x10)) print_msg(" PCR ");
-    if (ON(adapt[0],0x08)) print_msg(" OPCR ");
-    if (ON(adapt[0],0x04)) print_msg(" splicing ");
-    if (ON(adapt[0],0x02)) print_msg(" private ");
-    if (ON(adapt[0],0x01)) print_msg(" extension ");
+    printf(":");
+    if (ON(adapt[0],0x80)) printf(" discontinuity ");
+    if (ON(adapt[0],0x40)) printf(" random access ");
+    if (ON(adapt[0],0x20)) printf(" ES-priority ");
+    if (ON(adapt[0],0x10)) printf(" PCR ");
+    if (ON(adapt[0],0x08)) printf(" OPCR ");
+    if (ON(adapt[0],0x04)) printf(" splicing ");
+    if (ON(adapt[0],0x02)) printf(" private ");
+    if (ON(adapt[0],0x01)) printf(" extension ");
   }
-  print_msg("\n");
+  printf("\n");
 
   get_PCR_from_adaptation_field(adapt,adapt_len,&got_pcr,&pcr);
   if (got_pcr)
   {
-    fprint_msg(" .. PCR %12" LLU_FORMAT_STUMP "\n", pcr);
+    printf(" .. PCR %12" LLU_FORMAT_STUMP "\n", pcr);
   }
   return;
 }
@@ -2004,7 +1996,7 @@ extern void report_adaptation_timing(timing_p    times,
   get_PCR_from_adaptation_field(adapt,adapt_len,&got_pcr,&pcr);
   if (got_pcr)
   {
-    fprint_msg(" .. PCR %12" LLU_FORMAT_STUMP, pcr);
+    printf(" .. PCR %12" LLU_FORMAT_STUMP, pcr);
     if (!times->had_first_pcr)
     {
       times->last_pcr_packet = times->first_pcr_packet = packet_count;
@@ -2014,21 +2006,21 @@ extern void report_adaptation_timing(timing_p    times,
     else
     {
       if (pcr < times->last_pcr)
-        fprint_msg(" Discontinuity: PCR was %7" LLU_FORMAT_STUMP ", now %7"
-                   LLU_FORMAT_STUMP,times->last_pcr,pcr);
+        printf(" Discontinuity: PCR was %7" LLU_FORMAT_STUMP ", now %7"
+               LLU_FORMAT_STUMP,times->last_pcr,pcr);
       else
       {
-        fprint_msg(" Mean byterate %7" LLU_FORMAT_STUMP,
-                   ((packet_count - times->first_pcr_packet) * TS_PACKET_SIZE) *
-                   TWENTY_SEVEN_MHZ / pcr_unsigned_diff(pcr, times->first_pcr));
-        fprint_msg(" byterate %7" LLU_FORMAT_STUMP,
-                   ((packet_count - times->last_pcr_packet) * TS_PACKET_SIZE) *
-                   TWENTY_SEVEN_MHZ / pcr_unsigned_diff(pcr, times->last_pcr));
+        printf(" Mean byterate %7" LLU_FORMAT_STUMP,
+               ((packet_count - times->first_pcr_packet) * TS_PACKET_SIZE) *
+               TWENTY_SEVEN_MHZ / (pcr - times->first_pcr));
+        printf(" byterate %7" LLU_FORMAT_STUMP,
+               ((packet_count - times->last_pcr_packet) * TS_PACKET_SIZE) *
+               TWENTY_SEVEN_MHZ / (pcr - times->last_pcr));
       }
     }
     times->last_pcr_packet = packet_count;
     times->last_pcr = pcr;
-    print_msg("\n");
+    printf("\n");
   }
   return;
 }
@@ -2055,7 +2047,7 @@ extern void report_payload(int         show_data,
   if (payload_unit_start_indicator)
     report_PES_data_array2(stream_type,payload,payload_len, show_data?1000:0);
   else if (show_data)
-    print_data(TRUE,"Data",payload,payload_len,1000);
+    print_data(stdout,"Data",payload,payload_len,1000);
 }
 
 /*
@@ -2091,22 +2083,22 @@ extern int extract_prog_list_from_pat(int            verbose,
 
   if (data_len == 0)
   {
-    print_err("### PAT data has zero length\n");
+    KLOG("### PAT data has zero length\n");
     return 1;
   }
   if (data == NULL)
   {
-    print_err("### PAT data is NULL\n");
+    KLOG("### PAT data is NULL\n");
     return 1;
   }
 
-  if (DEBUG) print_data(TRUE,"Data",data,data_len,1000);
+  if (DEBUG) print_data(stdout,"Data",data,data_len,1000);
 
   // The table id in a PAT should be 0
   table_id = data[0];
   if (table_id != 0)
   {
-    fprint_err("### PAT table id is %0#8x, should be 0\n",table_id);
+    KLOG("### PAT table id is %0#8x, should be 0\n",table_id);
     return 1;
   }
 
@@ -2115,44 +2107,44 @@ extern int extract_prog_list_from_pat(int            verbose,
   zero_bit = (data[1] & 0x40) >> 6;
   reserved1 = (data[1] & 0x30) >> 4;
   if (section_syntax_indicator != 1 && report_bad_reserved_bits)
-    print_err("!!! PAT: section syntax indicator is 0, not 1\n");
+    KLOG("!!! PAT: section syntax indicator is 0, not 1\n");
   if (zero_bit != 0 && report_bad_reserved_bits)
-    print_err("!!! PAT: zero bit is 1, not 0\n");
+    KLOG("!!! PAT: zero bit is 1, not 0\n");
   if (reserved1 != 3 && report_bad_reserved_bits)
-    fprint_err("!!! PAT: reserved1 is %d, not 3\n",reserved1);
+    KLOG("!!! PAT: reserved1 is %d, not 3\n",reserved1);
 
   section_length = ((data[1] & 0xF) << 8) | data[2];
   if (verbose)
-    fprint_msg("  section length:       %03x (%d)\n",
-               section_length,section_length);
+    printf("  section length:       %03x (%d)\n",
+           section_length,section_length);
 
   // If the section length doesn't match our data length, we've got problems
   // (remember, the section_length counts bytes after the section_length field)
   if (section_length > data_len - 3)
   {
-    fprint_err("### PAT section length %d is more than"
-               " length of remaining data %d\n",section_length,data_len-3);
+    KLOG("### PAT section length %d is more than"
+            " length of remaining data %d\n",section_length,data_len-3);
     return 1;
   }
   else if (section_length < data_len - 3)
   {
-    fprint_err("!!! PAT section length %d does not use all of"
-               " remaining data %d\n",section_length,data_len-3);
+    KLOG("!!! PAT section length %d does not use all of"
+            " remaining data %d\n",section_length,data_len-3);
     // Adjust it and carry on
     data_len = section_length + 3;
   }
   data_len = section_length + 3;
 
   transport_stream_id = (data[3] << 8) | data[4];
-  if (verbose) fprint_msg("  transport stream id: %04x\n",transport_stream_id);
+  if (verbose) printf("  transport stream id: %04x\n",transport_stream_id);
   // reserved2 = (data[5] & 0xC0) >> 14;
   version_number = (data[5] & 0x3E) >> 1;
   current_next_indicator = data[5] & 0x1;
   section_number = data[6];
   last_section_number = data[7];
   if (verbose)
-    fprint_msg("  version number %02x, current next %x, section number %x, last"
-               " section number %x\n",version_number,current_next_indicator,
+    printf("  version number %02x, current next %x, section number %x, last"
+           " section number %x\n",version_number,current_next_indicator,
            section_number,last_section_number);
 
   // 32 bits at the end of a program association section is reserved for a CRC
@@ -2166,8 +2158,8 @@ extern int extract_prog_list_from_pat(int            verbose,
   check_crc = crc32_block(0xffffffff,data,data_len);
   if (check_crc != 0)
   {
-    fprint_err("!!! Calculated CRC for PAT is %08x, not 00000000"
-               " (CRC in data was %08x)\n",check_crc,crc);
+    KLOG("!!! Calculated CRC for PAT is %08x, not 00000000"
+            " (CRC in data was %08x)\n",check_crc,crc);
     return 1;
   }
 
@@ -2176,7 +2168,7 @@ extern int extract_prog_list_from_pat(int            verbose,
   program_data = data + 8;
   program_data_len = data_len - 8 - 4; // The "-4" is for the CRC
 
-  //print_data(TRUE,"Rest:",program_data,program_data_len,1000);
+  //print_data(stdout,"Rest:",program_data,program_data_len,1000);
 
   err = build_pidint_list(prog_list);
   if (err) return 1;
@@ -2191,13 +2183,13 @@ extern int extract_prog_list_from_pat(int            verbose,
     if (!program_number)
     {
       if (verbose)
-        fprint_msg("    Network ID %04x (%3d)\n", pid, pid);
+        printf("    Network ID %04x (%3d)\n", pid, pid);
     }
     else
     {
       if (verbose)
-        fprint_msg("    Program %03x (%3d) -> PID %04x (%3d)\n",
-                   program_number,program_number,pid,pid);
+        printf("    Program %03x (%3d) -> PID %04x (%3d)\n",
+               program_number,program_number,pid,pid);
       err = append_to_pidint_list(*prog_list,pid,program_number);
       if (err) return 1;
     }
@@ -2207,355 +2199,11 @@ extern int extract_prog_list_from_pat(int            verbose,
   return 0;
 }
 
-
-static const char * dvb_component_type3_str(int component_type)
-{
-  switch (component_type)
-  {
-  case 0x01:
-    return "EBU Teletext subtitles";
-  case 0x02:
-    return "associated EBU Teletext";
-  case 0x03:
-    return "VBI data";
-  case 0x10:
-    return "DVB subtitles (normal) with no monitor aspect ratio criticality";
-  case 0x11:
-    return "DVB subtitles (normal) for display on 4:3 aspect ratio monitor";
-  case 0x12:
-    return "DVB subtitles (normal) for display on 16:9 aspect ratio monitor";
-  case 0x13:
-    return "DVB subtitles (normal) for display on 2.21:1 aspect ratio monitor";
-  case 0x14:
-    return "DVB subtitles (normal) for display on a high definition monitor";
-  case 0x20:
-    return "DVB subtitles (for the hard of hearing) with no monitor aspect ratio criticality";
-  case 0x21:
-    return "DVB subtitles (for the hard of hearing) for display on 4:3 aspect ratio monitor";
-  case 0x22:
-    return "DVB subtitles (for the hard of hearing) for display on 16:9 aspect ratio monitor";
-  case 0x23:
-    return "DVB subtitles (for the hard of hearing) for display on 2.21:1 aspect ratio monitor";
-  case 0x24:
-    return "DVB subtitles (for the hard of hearing) for display on a high definition monitor";
-
-  default:
-    if (component_type >= 0xb0 && component_type <= 0xfe)
-    {
-      return "user defined";
-    }
-    break;
-  }
-  return "reserved";
-}
-
-static const char * const descriptor_names[] =
-{
-    "Reserved",  // 0
-    "Forbidden",  // 1
-    "Video stream",  // 2
-    "Audio stream",  // 3
-    "Hierarchy",  // 4
-    "Registration",  // 5
-    "Data stream alignment",  // 6
-    "Target background grid",  // 7
-    "Video window",  // 8
-    "CA",  // 9
-    "ISO 639 language",  // 10
-    "System clock",  // 11
-    "Multiplex buffer utilization",  // 12
-    "Copyright",  // 13
-    "Maximum bitrate",  // 14
-    "Private data indicator",  // 15
-    "Smoothing buffer",  // 16
-    "STD",  // 17
-    "IBP",  // 18
-    "Defined in ISO/IEC 13818-6",  // 19
-    "Defined in ISO/IEC 13818-6",  // 20
-    "Defined in ISO/IEC 13818-6",  // 21
-    "Defined in ISO/IEC 13818-6",  // 22
-    "Defined in ISO/IEC 13818-6",  // 23
-    "Defined in ISO/IEC 13818-6",  // 24
-    "Defined in ISO/IEC 13818-6",  // 25
-    "Defined in ISO/IEC 13818-6",  // 26
-    "MPEG-4 video",  // 27
-    "MPEG-4 audio",  // 28
-    "IOD",  // 29
-    "SL",  // 30
-    "FMC",  // 31
-    "External ES ID",  // 32
-    "MuxCode",  // 33
-    "FmxBufferSize",  // 34
-    "MultiplexBuffer",  // 35
-    "Content labeling",  // 36
-    "Metadata pointer",  // 37
-    "Metadata",  // 38
-    "Metadata STD",  // 39
-    "AVC video descriptor",  // 40
-    "IPMP (defined in ISO/IEC 13818-11, MPEG-2 IPMP)",  // 41
-    "AVC timing and HRD descriptor",  // 42
-    "MPEG-2 AAC audio",  // 43
-    "FlexMuxTiming",  // 44
-    "MPEG-4 text",  // 45
-    "MPEG-4 audio extension",  // 46
-    "auxiliary video stream",  // 47
-    "SVC extension",  // 48
-    "MVC extension",  // 49
-    "J2K video descriptor",  // 50
-    "MVC operation point descriptor",  // 51
-    "MPEG2 stereoscopic video format",  // 52
-    "Stereoscopic_program_info_descriptor", // 53
-    "Stereoscopic_video_info_descriptor", // 54
-    "Transport_profile_descriptor", // 55
-    "HEVC video descriptor", // 56
-    "Reserved (57)", // 57
-    "Reserved (58)", // 58
-    "Reserved (59)", // 59
-    "Reserved (60)", // 60
-    "Reserved (61)", // 61
-    "Reserved (62)", // 62
-    "Extension descriptor", // 63
-};
-
-
-// From ATSC A/52B section A3.4
-// N.B. Horizontal lines in the table represent valid stop points
-
-static void print_ac3_audio_descriptor(const int is_msg, const byte * const buf, const int len)
-{
-  const byte * p = buf;
-  const byte * const eop = p + len;
-  static const char * const sample_rate_txt[8] = {
-    "48k", "44k1", "32k", "Reserved(3)", "48k or 44.1k", "48k or 32k", "44.1k or 32k", "48k or 44.1k or 32k"
-  };
-  static const int bit_rate_n[32] = {
-    32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640,
-  };
-  static const char * const dsurmod_txt[4] = {
-    "Unknown", "Not Dolby suuround encoded", "Dolby surround encoded", "Reserved"
-  };
-  static const char * const num_channels_txt[16] = {
-    "1 + 1", "1/0", "2/0", "3/0", "2/1", "3/1", "2/2", "3/2",
-    "1", "<=2", "<=3", "<=4", "<=5", "<=6", "Reserved(14)", "Reserved(15)"
-  };
-  static const char * const priority_txt[4] = {
-    "Reserved(0)", "Primary Audio", "Other Audio", "Not specified"
-  };
-  unsigned int nc;
-  unsigned int bsmod;
-
-  if (p >= eop)
-  {
-    goto too_short;
-  }
-  fprint_msg_or_err(is_msg, "sample_rate: %s, bsid: %d", sample_rate_txt[*p >> 5], *p & 0x1f);
-  ++p;
-  fprint_msg_or_err(is_msg, ", bit_rate: %s %dk, dsurmod: %s",  *p >> 7 ? "Upper" : "Exact",
-      bit_rate_n[(*p >> 2) & 31],
-      dsurmod_txt[*p & 3]);
-  if (++p >= eop)
-  {
-    goto too_short;
-  }
-  nc = (*p >> 1) & 0x0f;
-  bsmod = *p >> 5;
-  fprint_msg_or_err(is_msg, ", bsmod: %d, num_channels: %s, full_svc: %d",
-      bsmod, num_channels_txt[nc], *p & 1);
-  if (++p >= eop)
-  {
-    goto done;
-  }
-  fprint_msg_or_err(is_msg, ", langcod: %d", *p);
-  if (nc == 0)
-  {
-    if (++p >= eop)
-    {
-      goto done;
-    }
-    fprint_msg_or_err(is_msg, ", langcod2: %d", *p);
-  }
-  if (++p >= eop)
-  {
-    goto done;
-  }
-  if (bsmod < 2)
-  {
-    fprint_msg_or_err(is_msg, ", mainid: %d, priority: %s", *p >> 5, priority_txt[(*p >> 3) & 3]);
-    if ((*p & 7) != 7)
-    {
-      fprint_msg_or_err(is_msg, ", reserved(7): %d", *p & 7);
-    }
-  }
-  else
-  {
-    fprint_msg_or_err(is_msg, ", asvcflags: %#08x", *p);
-  }
-  if (++p >= eop)
-  {
-    goto done;
-  }
-  {
-    unsigned int textlen = *p >> 1;
-    const int utf16 = !(*p & 1);
-    fprint_msg_or_err(is_msg, ", text(%c): ", utf16 ? 'U' : 'S');
-    if (p + textlen >= eop)
-    {
-      goto too_short;
-    }
-    if (textlen == 0)
-    {
-      fprint_msg_or_err(is_msg, "<none>");
-    }
-    else if (!utf16)
-    {
-      fprint_msg_or_err(is_msg, "\"");
-      while (textlen-- != 0)
-      {
-        fprint_msg_or_err(is_msg, "%c", *++p);
-      }
-      fprint_msg_or_err(is_msg, "\"");
-    }
-    else
-    {
-      fprint_msg_or_err(is_msg, "??");
-      p += textlen;
-    }
-  }
-  if (++p >= eop)
-  {
-    goto done;
-  }
-  {
-    const int language_flag = *p >> 7;
-    const int language_flag_2 = (*p >> 6) & 1;
-
-    if ((*p & 0x1f) != 0x1f)
-    {
-      fprint_msg_or_err(is_msg, ", reserved(0x1f): %#x", *p & 0x1f);
-    }
-
-    if (language_flag)
-    {
-      if (++p + 2 >= eop)
-      {
-        goto too_short;
-      }
-      fprint_msg_or_err(is_msg, ", language: %c%c%c", p[0], p[1], p[2]);
-      p += 2;
-    }
-    if (language_flag_2)
-    {
-      if (++p + 2 >= eop)
-      {
-        goto too_short;
-      }
-      fprint_msg_or_err(is_msg, ", language_2: %c%c%c", p[0], p[1], p[2]);
-      p += 2;
-    }
-  }
-
-  if (++p >= eop)
-  {
-    goto done;
-  }
-
-  print_data(is_msg, "additional_info: ", p, eop - p,100);
-
-done:
-  fprint_msg_or_err(is_msg, "\n");
-  return;
-
-too_short:
-  fprint_msg_or_err(is_msg, "; ### block short ###\n");
-}
-
-static void print_HEVC_descriptor(const int is_msg, const byte * const buf, const int len)
-{
-  const uint8_t * p = buf;
-  const byte * const eop = p + len;
-  static const char * const prog_interlace[4] = {
-    "unknown scan source",
-    "interlaced source",
-    "progressive source",
-    "mixed scan source"
-  };
-
-  if (len == 9)
-  {
-    // I've seen a number of these but I can't find a standard
-    print_data(is_msg, "HEVC video descriptor ### bad length", buf, len ,100);
-    return;
-  }
-
-  fprint_msg_or_err(is_msg, "HEVC video descriptor:");
-
-  if (p >= eop)
-  {
-    goto too_short;
-  }
-  fprint_msg_or_err(is_msg, " profile_space=%d, tier_flag=%d, profile_idc=%d", *p >> 6, (*p >> 5) & 1, *p & 0x1f);
-  if (++p + 3 >= eop)
-  {
-    goto too_short;
-  }
-  fprint_msg_or_err(is_msg, ", profile_compatability=%#08x", uint_32_be(p));
-  if ((p += 4) + 5 >= eop)
-  {
-    goto too_short;
-  }
-  fprint_msg_or_err(is_msg, ", %s%s%s", prog_interlace[*p >> 6], *p & 0x20 ? ", non_packed" : "", *p & 0x10 ? ", frame_only" : "");
-  if ((*p & 0xf) != 0 || p[1] != 0 || p[2] != 0 || p[3] != 0 || p[4] != 0 || p[5] != 0)
-  {
-    fprint_msg_or_err(is_msg, ", ### reserved_zero_44bits=0x%x%02x%08x", *p & 0xf, p[1], uint_32_be(p + 2));
-  }
-  if ((p += 6) >= eop)
-  {
-    goto too_short;
-  }
-  fprint_msg_or_err(is_msg, ", level=%d.%d", *p / 30, *p % 30);
-  if (++p >= eop)
-  {
-    goto too_short;
-  }
-  fprint_msg_or_err(is_msg, "%s%s", *p & 0x40 ? ", still" : "", *p & 0x20 ? ", 24hr" : "");
-  if ((*p & 0x1f) != 0x1f)
-  {
-    fprint_msg_or_err(is_msg, ", ### reserved=%#02x", *p & 0x1f);
-  }
-  if ((*p++ & 0x80) != 0)
-  {
-    fprint_msg_or_err(is_msg, ", temporal_id");
-
-    if (p + 2 >= eop)
-    {
-      goto too_short;
-    }
-
-    if ((*p >> 3) != 0x1f)
-    {
-      fprint_msg_or_err(is_msg, " ### reserved=%#02x", *p & 0x1f);
-    }
-    fprint_msg_or_err(is_msg, " min=%d", *p & 7);
-    ++p;
-    if ((*p >> 3) != 0x1f)
-    {
-      fprint_msg_or_err(is_msg, " ### reserved=%#02x", *p & 0x1f);
-    }
-    fprint_msg_or_err(is_msg, " max=%d", *p & 7);
-    ++p;
-  }
-  fprint_msg_or_err(is_msg,"\n");
-  return;
-
-too_short:
-  fprint_msg_or_err(is_msg, "; ### block short ###\n");
-}
-
 /*
  * Print out information about program descriptors
  * (either from the PMT program info, or the PMT/stream ES info)
  *
- * - if `is_msg` then print as a message, otherwise as an error
+ * - `stream` is the stream to print on
  * - `leader1` and `leader2` are the text to write at the start of each line
  *   (either or both may be NULL)
  * - `desc_data` is the data containing the descriptors
@@ -2565,16 +2213,18 @@ too_short:
  *
  * If you want to interpret more descriptors then ITU-T J.94 is the standard
  */
-extern int print_descriptors(int    is_msg,
+extern int print_descriptors(FILE  *stream,
                              char  *leader1,
                              char  *leader2,
                              byte  *desc_data,
                              int    desc_data_len)
 {
+  int    ii;
   byte   data_len = desc_data_len;
   byte  *data = desc_data;
   while (data_len >= 2)
   {
+    char *name = NULL;
     byte  tag = data[0];
     byte  this_length = data[1];
 
@@ -2584,252 +2234,131 @@ extern int print_descriptors(int    is_msg,
     if (this_length > data_len)
     {
       // Not much we can do - try giving up?
-      fprint_msg_or_err(is_msg,"Descriptor %x says length %d, but only %d bytes left\n",
-                        tag,this_length,data_len);
+      fprintf(stream,"Descriptor %x says length %d, but only %d bytes left\n",
+             tag,this_length,data_len);
       return 1;  // Hmm - well, maybe
     }
 
-    if (leader1 != NULL) fprint_msg_or_err(is_msg,"%s",leader1);
-    if (leader2 != NULL) fprint_msg_or_err(is_msg,"%s",leader2);
+    // We'll just name the standard tags, unless we care to deal with them in
+    // more detail below...
+    name = (tag==0?"Reserved":
+            tag==1?"Reserved":
+            tag==2?"video stream":
+            tag==3?"audio stream":
+            tag==4?"hierarchy":
+            tag==6?"data stream alignment":
+            tag==7?"target background grid":
+            tag==8?"video window":
+            tag==11?"system clock":
+            tag==12?"multiplex buffer utilization":
+            tag==13?"copyright":
+            tag==14?"maximum bitrate":
+            tag==15?"private data indicator":
+            tag==16?"smoothing buffer":
+            tag==17?"STD":
+            tag==18?"IBP":
+            tag>19 && tag<64?"Reserved":NULL);
 
+    if (leader1 != NULL) fputs(leader1,stream);
+    if (leader2 != NULL) fputs(leader2,stream);
+    if (name != NULL)
+      print_data(stream,name,data,this_length,100);
+    else
     {
-      int    ii;
-      uint32_t temp_u;
-
       switch (tag)
       {
+        uint32_t temp_u;
       case 5:
-        fprint_msg_or_err(is_msg,"Registration ");
+        fprintf(stream,"Registration ");
         if (this_length >= 4)
         {
           for (ii=0; ii<4; ii++)
           {
             if (isprint(data[ii]))
-              fprint_msg_or_err(is_msg,"%c",data[ii]);
+              putc(data[ii],stream);
             else
-              fprint_msg_or_err(is_msg,"<%02x>",data[ii]);
+              fprintf(stream,"<%02x>",data[ii]);
           }
           if (this_length > 4)
             for (ii=4; ii < this_length; ii++)
-              fprint_msg_or_err(is_msg," %02x",data[ii]);
+              fprintf(stream," %02x",data[ii]);
         }
-        fprint_msg_or_err(is_msg,"\n");
+        fprintf(stream,"\n");
         break;
       case 9:           // I see this in data, so might as well "explain" it
-        fprint_msg_or_err(is_msg,"Conditional access: ");
+        fprintf(stream,"Conditional access: ");
         temp_u = (data[0] << 8) | data[1];
-        fprint_msg_or_err(is_msg,"id %04x (%d) ",temp_u,temp_u);
+        fprintf(stream,"id %04x (%d) ",temp_u,temp_u);
         temp_u = ((data[2] & 0x1F) << 8) | data[3];
-        fprint_msg_or_err(is_msg,"PID %04x (%d) ",temp_u,temp_u);
+        fprintf(stream,"PID %04x (%d) ",temp_u,temp_u);
         if (data_len > 4)
-          print_data(is_msg,"data",&data[4],data_len-4,data_len-4);
+          print_data(stream,"data",&data[4],data_len-4,data_len-4);
         else
-          fprint_msg_or_err(is_msg,"\n");
+          fprintf(stream,"\n");
         break;
       case 10:            // We'll assume the length is a multiple of 4
-        fprint_msg_or_err(is_msg,"Languages: ");
+        fprintf(stream,"Languages: ");
         for (ii = 0; ii < this_length/4; ii++)
         {
           byte audio_type;
-          if (ii > 0) fprint_msg_or_err(is_msg,", ");
-          fprint_msg_or_err(is_msg,"%c",*(data+(ii*4)+0));
-          fprint_msg_or_err(is_msg,"%c",*(data+(ii*4)+1));
-          fprint_msg_or_err(is_msg,"%c",*(data+(ii*4)+2));
+          if (ii > 0) fprintf(stream,", ");
+          putc(*(data+(ii*4)+0),stream);
+          putc(*(data+(ii*4)+1),stream);
+          putc(*(data+(ii*4)+2),stream);
           audio_type = *(data+(ii*4)+3);
           switch (audio_type)
           {
-          case 0: /*fprint_msg_or_err(is_msg,"/undefined");*/ break;  // clearer to say nowt?
-          case 1: fprint_msg_or_err(is_msg,"/clean effects"); break;
-          case 2: fprint_msg_or_err(is_msg,"/hearing impaired"); break;
-          case 3: fprint_msg_or_err(is_msg,"/visual impaired commentary"); break;
-          default: fprint_msg_or_err(is_msg,"/reserved:0x%02x",audio_type); break;
+          case 0: fprintf(stream,"/undefined"); break;  // clearer to say nowt?
+          case 1: fprintf(stream,"/clean effects"); break;
+          case 2: fprintf(stream,"/hearing impaired"); break;
+          case 3: fprintf(stream,"/visual impaired commentary"); break;
+          default: fprintf(stream,"/reserved:0x%02x",audio_type); break;
           }
         }
-        fprint_msg_or_err(is_msg,"\n");
+        fprintf(stream,"\n");
         break;
-
-      case 40:
-      {
-        const uint8_t * p = data;
-        unsigned int t;
-
-        fprint_msg_or_err(is_msg,"AVC video descriptor: ");
-
-        if (this_length != 4)
-        {
-          if (this_length < 4)
-          {
-            // Give up if too short
-            fprint_msg_or_err(is_msg,"### descriptor too short %d ###\n", this_length);
-            break;
-          }
-          else
-          {
-            // Complain but carry on if too long
-            fprint_msg_or_err(is_msg,"### descriptor too long %d ###: \n", this_length);
-          }
-        }
-
-        fprint_msg_or_err(is_msg,"profile idc: %d, ", *p++);
-        fprint_msg_or_err(is_msg,"constraint_set[");
-        t = *p;
-        for (ii = 0; ii != 6; ++ii)
-        {
-          fprint_msg_or_err(is_msg,"%c", (t & 0x80) != 0 ? '0' + ii : '-');
-          t <<= 1;
-        }
-        fprint_msg_or_err(is_msg,"], AVC_compatible_flags: %d, ", *p++ & 3);
-        fprint_msg_or_err(is_msg,"level_idc: %d, ", *p++);
-        fprint_msg_or_err(is_msg,"AVC_still_present: %d, ", (*p >> 7) & 1);
-        fprint_msg_or_err(is_msg,"AVC_24_hour_picture_flag: %d, ", (*p >> 6) & 1);
-        fprint_msg_or_err(is_msg,"Frame_Packing_SEI_not_present_flag: %d, ", (*p >> 5) & 1);
-        fprint_msg_or_err(is_msg,"reserved: %#x", *p & 0x1f);
-
-        fprint_msg_or_err(is_msg,"\n");
-        break;
-      }
-
-      case 42:
-        {
-          const uint8_t * p = data;
-          fprint_msg_or_err(is_msg,"AVC timing and HRD descriptor: ");
-          fprint_msg_or_err(is_msg,"hrd_management_valid_flag: %d, ", (*p & 0x80) != 0);
-          if ((*p & 0x7e) != 0x7e)
-          {
-            fprint_msg_or_err(is_msg,"reserved: %#x, ", (*p & 0x7e) >> 1);
-          }
-          if ((*p++ & 1) != 0)  // picture_and_timing_info_present
-          {
-            int flag90 = *p >> 7;
-            uint32_t n = 1, k = 300;
-            uint32_t ntick;
-
-            if (flag90)
-            {
-              fprint_msg_or_err(is_msg,"90kHz_flag, ", *p & 0x7f);
-            }
-            if ((*p & 0x7f) != 0x7f)
-            {
-              fprint_msg_or_err(is_msg,"reserved: %#x, ", *p & 0x7f);
-            }
-            ++p;
-            if (!flag90)
-            {
-              n = uint_32_be(p);
-              p += 4;
-              k = uint_32_be(p);
-              p += 4;
-              fprint_msg_or_err(is_msg,"N/K: %u/%u, ", n, k);
-            }
-            ntick = uint_32_be(p);
-            p += 4;
-            fprint_msg_or_err(is_msg,"num_units_in_tick: %u, ", ntick);
-            if (k == 0 || ntick == 0)
-              fprint_msg_or_err(is_msg,"(frame rate: \?\?\?), ");
-            else
-              fprint_msg_or_err(is_msg,"(frame rate: %.6g), ", ((double)n * 27000000.0) / ((double)k * (double)ntick) / 2.0);
-          }
-          fprint_msg_or_err(is_msg,"fixed_frame_rate_flag: %u, ", *p >> 7);
-          fprint_msg_or_err(is_msg,"temporal_poc_flag: %u, ", (*p >> 6) & 1);
-          fprint_msg_or_err(is_msg,"picture_to_display_conversion_flag: %u", (*p >> 5) & 1);
-          if ((*p & 0x1f) != 0x1f)
-          {
-            fprint_msg_or_err(is_msg,", reserved: %#x", *p & 0x1f);
-          }
-          fprint_msg_or_err(is_msg,"\n");
-        }
-        break;
-
-      case 52:
-        fprint_msg_or_err(is_msg,"MPEG2 stereoscopic video format: ");
-
-        if (this_length != 1)
-        {
-          if (this_length < 1)
-          {
-            // Give up if too short
-            fprint_msg_or_err(is_msg,"### descriptor too short %d ###\n", this_length);
-            break;
-          }
-          else
-          {
-            // Complain but carry on if too long
-            fprint_msg_or_err(is_msg,"### descriptor too long %d ###: \n", this_length);
-          }
-        }
-
-        if ((data[0] & 0x80) != 0)
-        {
-          fprint_msg_or_err(is_msg,"arrangement not present: reserved: %#x", data[0] & 0x7f);
-        }
-        else
-        {
-          fprint_msg_or_err(is_msg,"arrangement: ");
-          switch (data[0])
-          {
-          case 3:
-            fprint_msg_or_err(is_msg,"S3D side by side");
-            break;
-          case 4:
-            fprint_msg_or_err(is_msg,"S3D top and bottom");
-            break;
-          case 8:
-            fprint_msg_or_err(is_msg,"2D video");
-            break;
-          default:
-            fprint_msg_or_err(is_msg,"reserved: %#x", data[0] & 0x7f);
-            break;
-          }
-        }
-        fprint_msg_or_err(is_msg,"\n");
-        break;
-
-      case 56:
-        print_HEVC_descriptor(is_msg, data, this_length);
-        break;
-
       case 0x56:  // teletext
         for (ii = 0; ii < this_length; ii += 5)
         {
           int jj;
           int teletext_type, teletext_magazine, teletext_page;
           if (ii == 0)
-            fprint_msg_or_err(is_msg,"Teletext: ");
+            fprintf(stream,"Teletext: ");
           else
           {
-            if (leader1 != NULL) fprint_msg_or_err(is_msg,"%s",leader1);
-            if (leader2 != NULL) fprint_msg_or_err(is_msg,"%s",leader2);
-            fprint_msg_or_err(is_msg,"          ");
+            if (leader1 != NULL) fputs(leader1,stream);
+            if (leader2 != NULL) fputs(leader2,stream);
+            fprintf(stream,"          ");
           }
-          fprint_msg_or_err(is_msg,"language=");
+          fprintf(stream,"language=");
           for (jj=ii; jj<ii+3; jj++)
           {
             if (isprint(data[jj]))
-              fprint_msg_or_err(is_msg,"%c",data[jj]);
+              putc(data[jj],stream);
             else
-              fprint_msg_or_err(is_msg,"<%02x>",data[jj]);
+              fprintf(stream,"<%02x>",data[jj]);
           }
           teletext_type = (data[ii+3] & 0xF8) >> 3;
           teletext_magazine = (data[ii+3] & 0x07);
           teletext_page = data[ii+4];
-          fprint_msg_or_err(is_msg,", type=");
+          fprintf(stream,", type=");
           switch (teletext_type)
           {
-          case 1: fprint_msg_or_err(is_msg,"Initial"); break;
-          case 2: fprint_msg_or_err(is_msg,"Subtitles"); break;
-          case 3: fprint_msg_or_err(is_msg,"Additional info"); break;
-          case 4: fprint_msg_or_err(is_msg,"Programme schedule"); break;
-          case 5: fprint_msg_or_err(is_msg,"Hearing impaired subtitles"); break;
-          default: fprint_msg_or_err(is_msg,"%x (reserved)",teletext_type); break;
+          case 1: fprintf(stream,"Initial"); break;
+          case 2: fprintf(stream,"Subtitles"); break;
+          case 3: fprintf(stream,"Additional info"); break;
+          case 4: fprintf(stream,"Programme schedule"); break;
+          case 5: fprintf(stream,"Hearing impaired subtitles"); break;
+          default: fprintf(stream,"%x (reserved)",teletext_type); break;
           }
-          fprint_msg_or_err(is_msg,", magazine %d, page %x",teletext_magazine,teletext_page);
-          fprint_msg_or_err(is_msg,"\n");
+          fprintf(stream,", magazine %d, page %x",teletext_magazine,teletext_page);
+          fprintf(stream,"\n");
         }
         break;
 
       case 0x59:
       {
-        fprint_msg_or_err(is_msg, "subtitling_descriptor(s):\n");
+        fprintf(stream, "subtitling_descriptor:\n");
 
         for (ii = 0; ii + 8 <= this_length; ii += 8)
         {
@@ -2841,42 +2370,34 @@ extern int print_descriptors(int    is_msg,
           lang[1] = data[ii + 1];
           lang[2] = data[ii + 2];
           lang[3] = 0;
-          if (leader1 != NULL) fprint_msg_or_err(is_msg,"%s",leader1);
-          if (leader2 != NULL) fprint_msg_or_err(is_msg,"%s",leader2);
-          fprint_msg_or_err(is_msg,"  language='%s', subtitling_type=%u\n",
+          if (leader1 != NULL) fputs(leader1,stream);
+          if (leader2 != NULL) fputs(leader2,stream);
+          fprintf(stream, 
+            "  language='%s', subtitling_type=%u\n",
             lang, subtitling_type);
-          if (leader1 != NULL) fprint_msg_or_err(is_msg,"%s",leader1);
-          if (leader2 != NULL) fprint_msg_or_err(is_msg,"%s",leader2);
-          fprint_msg_or_err(is_msg, "    (%s)\n", dvb_component_type3_str(subtitling_type));
-          if (leader1 != NULL) fprint_msg_or_err(is_msg,"%s",leader1);
-          if (leader2 != NULL) fprint_msg_or_err(is_msg,"%s",leader2);
-          fprint_msg_or_err(is_msg, 
-            "  composition_page_id=%u, ancillary_page_id=%u\n",
+          if (leader1 != NULL) fputs(leader1,stream);
+          if (leader2 != NULL) fputs(leader2,stream);
+          fprintf(stream, 
+            "    composition_page_id=%u, ancillary_page_id=%u\n",
             composition_page_id, ancillary_page_id);
         }
         if (ii < this_length)
-          fprint_msg_or_err(is_msg, "### %d spare bytes at end of descriptor\n", this_length - ii);
+          fprintf(stream, "### %d spare bytes at end of descriptor\n", this_length - ii);
         break;
       }
 
       case 0x6A:
-        print_data(is_msg,"DVB AC-3",data,this_length,100);
+        print_data(stream,"DVB AC-3",data,this_length,100);
         break;
       case 0x81:
-//        print_data(is_msg,"ATSC AC-3",data,this_length,100);
-        fprint_msg_or_err(is_msg, "ATSC AC-3: ");
-        print_ac3_audio_descriptor(is_msg, data, this_length);
-        break;
-
+        print_data(stream,"ATSC AC-3",data,this_length,100);
       default:
+        // Report the tag number as decimal since that is how H.222
+        // describes it in table 2-39
         {
           char    temp_c[50]; // twice as much as I need...
-          snprintf(temp_c, sizeof(temp_c), "%s (%d)",
-            tag < sizeof(descriptor_names)/sizeof(descriptor_names[0]) ?
-                descriptor_names[tag] :
-              tag < 64 ? "Reserved" : "User Private",
-            tag);
-          print_data(is_msg,temp_c,data,this_length,100);
+          sprintf(temp_c,"Descriptor tag %02x (%3d)",tag,tag);
+          print_data(stream,temp_c,data,this_length,100);
         }
         break;
       }
@@ -2930,12 +2451,12 @@ extern int build_psi_data(int            verbose,
 
   if (payload_len == 0)
   {
-    print_err("### PMT payload has zero length\n");
+    KLOG("### PMT payload has zero length\n");
     return 1;
   }
   if (payload == NULL)
   {
-    print_err("### PMT payload is NULL\n");
+    KLOG("### PMT payload is NULL\n");
     return 1;
   }
 
@@ -2947,21 +2468,21 @@ extern int build_psi_data(int            verbose,
 
     if (pointer > (payload_len - 1))
     {
-      fprint_err("### PMT payload: pointer is %d, which is off the end of"
-                 " the packet (length %d)\n",pointer,payload_len);
+      KLOG("### PMT payload: pointer is %d, which is off the end of"
+              " the packet (length %d)\n",pointer,payload_len);
       return 1;
     }
 
-    // if (DEBUG) print_data(TRUE,"PMT",payload,payload_len,1000);
+    // if (DEBUG) print_data(stdout,"PMT",payload,payload_len,1000);
     packet_data = payload + pointer + 1;
     packet_data_len = payload_len - pointer - 1;
-    if (DEBUG) print_data(TRUE,"Data",packet_data,packet_data_len,1000);
+    if (DEBUG) print_data(stdout,"Data",packet_data,packet_data_len,1000);
 
     section_length = ((packet_data[1] & 0xF) << 8) | packet_data[2];
 
 #if 0 // XXX
-      print_msg("===========================================\n");
-      print_data(TRUE,"build_pmt_data(new)",packet_data,packet_data_len,packet_data_len);
+      printf("===========================================\n");
+      print_data(stdout,"build_pmt_data(new)",packet_data,packet_data_len,packet_data_len);
 #endif
 
     *data_len = section_length + 3;
@@ -2977,7 +2498,7 @@ extern int build_psi_data(int            verbose,
     *data = malloc(*data_len);
     if (*data == NULL)
     {
-      print_err("### Unable to malloc PSI data array\n");
+      KLOG("### Unable to malloc PSI data array\n");
       return 1;
     }
     memcpy(*data,packet_data,*data_len);
@@ -2989,11 +2510,11 @@ extern int build_psi_data(int            verbose,
     int space_left = *data_len - *data_used;
     packet_data = payload;
     packet_data_len = payload_len;
-    if (DEBUG) print_data(TRUE,"Data",packet_data,packet_data_len,1000);
+    if (DEBUG) print_data(stdout,"Data",packet_data,packet_data_len,1000);
 
 #if 0 // XXX
-    print_msg("===========================================\n");
-    print_data(TRUE,"build_pmt_data(old)",packet_data,packet_data_len,100);
+    printf("===========================================\n");
+    print_data(stdout,"build_pmt_data(old)",packet_data,packet_data_len,100);
 #endif
     if (space_left > packet_data_len)
     {
@@ -3049,16 +2570,16 @@ extern int extract_pmt(int            verbose,
 
   if (data_len == 0)
   {
-    print_err("### PMT data has zero length\n");
+    KLOG("### PMT data has zero length\n");
     return 1;
   }
   if (data == NULL)
   {
-    print_err("### PMT data is NULL\n");
+    KLOG("### PMT data is NULL\n");
     return 1;
   }
 
-  if (DEBUG) print_data(TRUE,"Data",data,data_len,1000);
+  if (DEBUG) print_data(stdout,"Data",data,data_len,1000);
 
   // Check the table id (maybe this should be done by our caller?)
   table_id = data[0];
@@ -3071,21 +2592,21 @@ extern int extract_pmt(int            verbose,
     {
       if (verbose)
       {
-        fprint_msg("    'PMT' with PID %04x is user private table %02x\n",pid,table_id);
-        print_data(TRUE,"    Data",data,data_len,20);
+        printf("    'PMT' with PID %04x is user private table %02x\n",pid,table_id);
+        print_data(stdout,"    Data",data,data_len,20);
       }
     }
     else
     {
       if (0x03 <= table_id && table_id <= 0x3F)
-        fprint_err("### PMT table id is %0#x (H.222 / ISO/IEC 13818-1"
-                   " reserved), should be 2\n",table_id);
+        KLOG("### PMT table id is %0#x (H.222 / ISO/IEC 13818-1"
+                " reserved), should be 2\n",table_id);
       else
-        fprint_err("### PMT table id is %0#x (%s), should be 2\n",
-                   table_id,(table_id==0x00?"PAT":
+        KLOG("### PMT table id is %0#x (%s), should be 2\n",
+                table_id,(table_id==0x00?"PAT":
                           table_id==0x01?"CAT":
                           table_id==0xFF?"Forbidden":"???"));
-      print_data(FALSE,"    Data",data,data_len,20);
+      print_data(stderr,"    Data",data,data_len,20);
     }
     // Best we can do is to pretend it didn't happen
     *pmt = build_pmt(0,0,0);  // empty "PMT" with program number 0, PCR PID 0
@@ -3098,69 +2619,69 @@ extern int extract_pmt(int            verbose,
   zero_bit = (data[1] & 0x40) >> 6;
   reserved = (data[1] & 0x30) >> 4;
   if (section_syntax_indicator != 1 && report_bad_reserved_bits)
-    print_err("!!! PMT: section syntax indicator is 0, not 1\n");
+    KLOG("!!! PMT: section syntax indicator is 0, not 1\n");
   if (zero_bit != 0 && report_bad_reserved_bits)
-    print_err("!!! PMT: zero bit is 1, not 0\n");
+    KLOG("!!! PMT: zero bit is 1, not 0\n");
   if (reserved != 3 && report_bad_reserved_bits)
-    fprint_err("!!! PMT: reserved (after zero bit) is %d, not 3\n",reserved);
+    KLOG("!!! PMT: reserved (after zero bit) is %d, not 3\n",reserved);
 
   section_length = ((data[1] & 0xF) << 8) | data[2];
   if (verbose)
-    fprint_msg("  section length:  %03x (%d)\n",section_length,section_length);
+    printf("  section length:  %03x (%d)\n",section_length,section_length);
 
   // If the section length doesn't match our data length, we've got problems
   // (remember, the section_length counts bytes after the section_length field)
   if (section_length > data_len - 3)
   {
-    fprint_err("### PMT section length %d is more than"
-               " length of remaining data %d\n",section_length,data_len-3);
+    KLOG("### PMT section length %d is more than"
+            " length of remaining data %d\n",section_length,data_len-3);
     return 1;
   }
   else if (section_length < data_len - 3)
   {
-    fprint_err("!!! PMT section length %d does not use all of"
-               " remaining data %d\n",section_length,data_len-3);
+    KLOG("!!! PMT section length %d does not use all of"
+            " remaining data %d\n",section_length,data_len-3);
     // Adjust it and carry on
     data_len = section_length + 3;
   }
 
   program_number = (data[3] << 8) | data[4];
   if (verbose)
-    fprint_msg("  program number: %04x\n",program_number);
-  reserved = (data[5] & 0xC0) >> 6;
+    printf("  program number: %04x\n",program_number);
+  reserved = (data[5] & 0xC0) >> 14;
   if (reserved != 3 && report_bad_reserved_bits)
-    fprint_err("!!! PMT: reserved (after program_number)"
-               " is %d, not 3\n",reserved);
+    KLOG("!!! PMT: reserved (after program_number)"
+            " is %d, not 3\n",reserved);
   version_number = (data[5] & 0x3E) >> 1;
   current_next_indicator = data[5] & 0x1;
   section_number = data[6];
   last_section_number = data[7];
   if (verbose)
-    fprint_msg("  version number %02x, current next %x, section number %x, last"
-               " section number %x\n",version_number,current_next_indicator,
+    printf("  version number %02x, current next %x, section number %x, last"
+           " section number %x\n",version_number,current_next_indicator,
            section_number,last_section_number);
 
   reserved = (data[8] & 0xE0) >> 5;
   if (reserved != 7 && report_bad_reserved_bits)
-    fprint_err("!!! PMT: reserved (after last_section_number)"
-               " is %d, not 7\n",reserved);
+    KLOG("!!! PMT: reserved (after last_section_number)"
+            " is %d, not 7\n",reserved);
   pcr_pid = ((data[8] & 0x1F) << 8) | data[9];
   if (verbose)
-    fprint_msg("  PCR PID: %04x\n",pcr_pid);
+    printf("  PCR PID: %04x\n",pcr_pid);
 
   reserved = (data[10] & 0xF0) >> 4;
   if (reserved != 0xF && report_bad_reserved_bits)
-    fprint_err("!!! PMT: reserved (after PCR PID)"
-               " is %x, not F\n",reserved);
+    KLOG("!!! PMT: reserved (after PCR PID)"
+            " is %x, not F\n",reserved);
 
   program_info_length = ((data[10] & 0x0F) << 8) | data[11];
   if (verbose)
-    fprint_msg("  program info length: %d\n",program_info_length);
+    printf("  program info length: %d\n",program_info_length);
 
   if (verbose && program_info_length > 0)
   {
-    print_msg("  Program info:\n");
-    print_descriptors(TRUE,"    ",NULL,&data[12],program_info_length);
+    printf("  Program info:\n");
+    print_descriptors(stdout,"    ",NULL,&data[12],program_info_length);
   }
 
   // 32 bits at the end of a program association section is reserved for a CRC
@@ -3174,8 +2695,8 @@ extern int extract_pmt(int            verbose,
   check_crc = crc32_block(0xffffffff,data,data_len);
   if (check_crc != 0)
   {
-    fprint_err("!!! Calculated CRC for PMT (PID %04x) is %08x, not 00000000"
-               " (CRC in data was %08x)\n",pid,check_crc,crc);
+    KLOG("!!! Calculated CRC for PMT (PID %04x) is %08x, not 00000000"
+            " (CRC in data was %08x)\n",pid,check_crc,crc);
     // Should we carry on or give up (if "give up", then "!!!" should be "###").
     //return 1;
   }
@@ -3186,7 +2707,7 @@ extern int extract_pmt(int            verbose,
   stream_data = data + 12 + program_info_length;
   stream_data_len = data_len - 12 - program_info_length - 4; // "-4" == CRC
 
-  //print_data(TRUE,"Rest:",stream_data,stream_data_len,1000);
+  //print_data(stdout,"Rest:",stream_data,stream_data_len,1000);
 
   *pmt = build_pmt(program_number,version_number,pcr_pid);
   if (*pmt == NULL) return 1;
@@ -3202,7 +2723,7 @@ extern int extract_pmt(int            verbose,
   }
 
   if (verbose)
-    print_msg("  Program streams:\n");
+    printf("  Program streams:\n");
   while (stream_data_len > 0)
   {
     int stream_type = stream_data[0];
@@ -3210,10 +2731,10 @@ extern int extract_pmt(int            verbose,
     int ES_info_length =  ((stream_data[3] & 0x0F) << 8) | stream_data[4];
     if (verbose)
     {
-      fprint_msg("    PID %04x -> Stream %02x %s\n",pid,stream_type,
-                 h222_stream_type_str(stream_type));
+      printf("    PID %04x -> Stream %02x %s\n",pid,stream_type,
+             h222_stream_type_str(stream_type));
       if (ES_info_length > 0)
-        print_descriptors(TRUE,"        ",NULL,&stream_data[5],ES_info_length);
+        print_descriptors(stdout,"        ",NULL,&stream_data[5],ES_info_length);
     }
     err = add_stream_to_pmt(*pmt,pid,stream_type,ES_info_length,
                             stream_data+5);
@@ -3271,27 +2792,27 @@ extern int extract_stream_list_from_pmt(int            verbose,
 
   if (payload_len == 0)
   {
-    print_err("### PMT payload has zero length\n");
+    KLOG("### PMT payload has zero length\n");
     return 1;
   }
   if (payload == NULL)
   {
-    print_err("### PMT payload is NULL\n");
+    KLOG("### PMT payload is NULL\n");
     return 1;
   }
   pointer = payload[0];
 
   if (pointer > (payload_len - 1))
   {
-    fprint_err("### PMT payload: pointer is %d, which is off the end of"
-               " the packet (length %d)\n",pointer,payload_len);
+    KLOG("### PMT payload: pointer is %d, which is off the end of"
+            " the packet (length %d)\n",pointer,payload_len);
     return 1;
   }
 
-  // if (DEBUG) print_data(TRUE,"PMT",payload,payload_len,1000);
+  // if (DEBUG) print_data(stdout,"PMT",payload,payload_len,1000);
   data = payload + pointer + 1;
   data_len = payload_len - pointer - 1;
-  if (DEBUG) print_data(TRUE,"Data",data,data_len,1000);
+  if (DEBUG) print_data(stdout,"Data",data,data_len,1000);
 
   // Check the table id (maybe this should be done by our caller?)
   table_id = data[0];
@@ -3304,21 +2825,21 @@ extern int extract_stream_list_from_pmt(int            verbose,
     {
       if (verbose)
       {
-        fprint_msg("    'PMT' with PID %04x is user private table %02x\n",pid,table_id);
-        print_data(TRUE,"    Data",data,data_len,20);
+        printf("    'PMT' with PID %04x is user private table %02x\n",pid,table_id);
+        print_data(stdout,"    Data",data,data_len,20);
       }
     }
     else
     {
       if (0x03 <= table_id && table_id <= 0x3F)
-        fprint_err("### PMT table id is %0#x (H.222 / ISO/IEC 13818-1"
-                   " reserved), should be 2\n",table_id);
+        KLOG("### PMT table id is %0#x (H.222 / ISO/IEC 13818-1"
+                " reserved), should be 2\n",table_id);
       else
-        fprint_err("### PMT table id is %0#x (%s), should be 2\n",
-                   table_id,(table_id==0x00?"PAT":
-                             table_id==0x01?"CAT":
-                             table_id==0xFF?"Forbidden":"???"));
-      print_data(FALSE,"    Data",data,data_len,20);
+        KLOG("### PMT table id is %0#x (%s), should be 2\n",
+                table_id,(table_id==0x00?"PAT":
+                          table_id==0x01?"CAT":
+                          table_id==0xFF?"Forbidden":"???"));
+      print_data(stderr,"    Data",data,data_len,20);
     }
     // Best we can do is to pretend it didn't happen
     *program_number = 0;
@@ -3332,67 +2853,67 @@ extern int extract_stream_list_from_pmt(int            verbose,
   zero_bit = (data[1] & 0x40) >> 6;
   reserved = (data[1] & 0x30) >> 4;
   if (section_syntax_indicator != 1 && report_bad_reserved_bits)
-    print_err("!!! PMT: section syntax indicator is 0, not 1\n");
+    KLOG("!!! PMT: section syntax indicator is 0, not 1\n");
   if (zero_bit != 0 && report_bad_reserved_bits)
-    print_err("!!! PMT: zero bit is 1, not 0\n");
+    KLOG("!!! PMT: zero bit is 1, not 0\n");
   if (reserved != 3 && report_bad_reserved_bits)
-    fprint_err("!!! PMT: reserved (after zero bit) is %d, not 3\n",reserved);
+    KLOG("!!! PMT: reserved (after zero bit) is %d, not 3\n",reserved);
 
   section_length = ((data[1] & 0xF) << 8) | data[2];
   if (verbose)
-    fprint_msg("  section length:   %03x (%d)\n",section_length,section_length);
+    printf("  section length:   %03x (%d)\n",section_length,section_length);
 
   // If the section length continues into another packet, we're not going
   // to cope with it. Otherwise, we need to adjust our idea of how long
   // the data we want to "read" is.
   if (section_length + 3 > data_len)
   {
-    fprint_err("### PMT continues into another packet - section length %d,"
-               " remaining packet data length %d\n",
-               section_length,data_len-3);
-    fprint_err("    This software does not support PMT data spanning"
-               " multiple TS packets\n");
+    KLOG("### PMT continues into another packet - section length %d,"
+            " remaining packet data length %d\n",
+            section_length,data_len-3);
+    KLOG("    This software does not support PMT data spanning"
+            " multiple TS packets\n");
     return 1;
   }
   data_len = section_length + 3;
 
   *program_number = (data[3] << 8) | data[4];
   if (verbose)
-    fprint_msg("  program number: %04x\n",*program_number);
-  reserved = (data[5] & 0xC0) >> 6;
+    printf("  program number: %04x\n",*program_number);
+  reserved = (data[5] & 0xC0) >> 14;
   if (reserved != 3 && report_bad_reserved_bits)
-    fprint_err("!!! PMT: reserved (after program_number)"
-               " is %d, not 3\n",reserved);
+    KLOG("!!! PMT: reserved (after program_number)"
+            " is %d, not 3\n",reserved);
   version_number = (data[5] & 0x3E) >> 1;
   current_next_indicator = data[5] & 0x1;
   section_number = data[6];
   last_section_number = data[7];
   if (verbose)
-    fprint_msg("  version number %02x, current next %x, section number %x, last"
-               " section number %x\n",version_number,current_next_indicator,
-               section_number,last_section_number);
+    printf("  version number %02x, current next %x, section number %x, last"
+           " section number %x\n",version_number,current_next_indicator,
+           section_number,last_section_number);
 
   reserved = (data[8] & 0xE0) >> 5;
   if (reserved != 7 && report_bad_reserved_bits)
-    fprint_err("!!! PMT: reserved (after last_section_number)"
-               " is %d, not 7\n",reserved);
+    KLOG("!!! PMT: reserved (after last_section_number)"
+            " is %d, not 7\n",reserved);
   *pcr_pid = ((data[8] & 0x1F) << 8) | data[9];
   if (verbose)
-    fprint_msg("  PCR PID: %04x\n",*pcr_pid);
+    printf("  PCR PID: %04x\n",*pcr_pid);
 
   reserved = (data[10] & 0xF0) >> 4;
   if (reserved != 0xF && report_bad_reserved_bits)
-    fprint_err("!!! PMT: reserved (after PCR PID)"
-               " is %x, not F\n",reserved);
+    KLOG("!!! PMT: reserved (after PCR PID)"
+            " is %x, not F\n",reserved);
 
   program_info_length = ((data[10] & 0x0F) << 8) | data[11];
   if (verbose)
-    fprint_msg("  program info length: %d\n",program_info_length);
+    printf("  program info length: %d\n",program_info_length);
 
   if (verbose && program_info_length > 0)
   {
-    print_msg("  Program info:\n");
-    print_descriptors(TRUE,"    ",NULL,&data[12],program_info_length);
+    printf("  Program info:\n");
+    print_descriptors(stdout,"    ",NULL,&data[12],program_info_length);
   }
 
   // 32 bits at the end of a program association section is reserved for a CRC
@@ -3406,8 +2927,8 @@ extern int extract_stream_list_from_pmt(int            verbose,
   check_crc = crc32_block(0xffffffff,data,data_len);
   if (check_crc != 0)
   {
-    fprint_err("!!! Calculated CRC for PMT (PID %04x) is %08x, not 00000000"
-               " (CRC in data was %08x)\n",pid,check_crc,crc);
+    KLOG("!!! Calculated CRC for PMT (PID %04x) is %08x, not 00000000"
+            " (CRC in data was %08x)\n",pid,check_crc,crc);
     return 1;
   }
 
@@ -3417,13 +2938,13 @@ extern int extract_stream_list_from_pmt(int            verbose,
   stream_data = data + 12 + program_info_length;
   stream_data_len = data_len - 12 - program_info_length - 4; // "-4" == CRC
 
-  //print_data(TRUE,"Rest:",stream_data,stream_data_len,1000);
+  //print_data(stdout,"Rest:",stream_data,stream_data_len,1000);
 
   err = build_pidint_list(stream_list);
   if (err) return 1;
 
   if (verbose)
-    print_msg("  Program streams:\n");
+    printf("  Program streams:\n");
   while (stream_data_len > 0)
   {
     int stream_type = stream_data[0];
@@ -3436,9 +2957,9 @@ extern int extract_stream_list_from_pmt(int            verbose,
       snprintf(buf,SARRAYSIZE,"(%s)",h222_stream_type_str(stream_type));
       // On Windows, snprintf does not guarantee to write a terminating NULL
       buf[SARRAYSIZE-1] = '\0';
-      fprint_msg("    Stream %02x %-40s -> PID %04x\n",stream_type,buf,pid);
+      printf("    Stream %02x %-40s -> PID %04x\n",stream_type,buf,pid);
       if (ES_info_length > 0)
-        print_descriptors(TRUE,"        ",NULL,&stream_data[5],ES_info_length);
+        print_descriptors(stdout,"        ",NULL,&stream_data[5],ES_info_length);
     }
     // For the moment, we shan't bother to remember the extra info.
     err = append_to_pidint_list(*stream_list,pid,stream_type);
@@ -3481,7 +3002,7 @@ extern int split_TS_packet(byte      buf[TS_PACKET_SIZE],
 
   if (buf[0] != 0x47)
   {
-    fprint_err("### TS packet starts %02x, not %02x\n",buf[0],0x47);
+    KLOG("### TS packet starts %02x, not %02x\n",buf[0],0x47);
     return 1;
   }
   *payload_unit_start_indicator = (buf[1] & 0x40) >> 6;
@@ -3502,9 +3023,9 @@ extern int split_TS_packet(byte      buf[TS_PACKET_SIZE],
   switch (adaptation_field_control)
   {
   case 0:
-    fprint_err("### Packet PID %04x has adaptation field control = 0\n"
-               "    which is a reserved value (no payload, no adaptation field)\n",
-               *pid);
+    //KLOG("### Packet PID %04x has adaptation field control = 0\n"
+    //        "    which is a reserved value (no payload, no adaptation field)\n",
+    //        *pid);
     *adapt = NULL;
     *adapt_len = 0;
     *payload = NULL;
@@ -3539,8 +3060,8 @@ extern int split_TS_packet(byte      buf[TS_PACKET_SIZE],
     break;
   default:
     // How this might occur, other than via program error, I can't think.
-    fprint_err("### Packet PID %04x has adaptation field control %x\n",
-               *pid,adaptation_field_control);
+    //KLOG("### Packet PID %04x has adaptation field control %x\n",
+    //        *pid,adaptation_field_control);
     return 1;
   }
   return 0;
@@ -3589,7 +3110,7 @@ extern int get_next_TS_packet(TS_reader_p  tsreader,
     return EOF;
   else if (err)
   {
-    print_err("### Error reading TS packet\n");
+    KLOG("### Error reading TS packet\n");
     return 1;
   }
   return split_TS_packet(packet,pid,payload_unit_start_indicator,
@@ -3624,7 +3145,7 @@ extern int find_pat(TS_reader_p     tsreader,
 
   *prog_list = NULL;
   *num_read  = 0;
-  if (!quiet) print_msg("Locating first PAT\n");
+  if (!quiet) printf("Locating first PAT\n");
   
   for (;;)
   {
@@ -3640,7 +3161,7 @@ extern int find_pat(TS_reader_p     tsreader,
       return EOF;
     else if (err)
     {
-      print_err("### Error reading TS packet\n");
+      KLOG("### Error reading TS packet\n");
       if (pat_data) free(pat_data);
       return 1;
     }
@@ -3650,12 +3171,12 @@ extern int find_pat(TS_reader_p     tsreader,
     if (pid == 0x0000)
     {
       if (!quiet)
-        fprint_msg("Found PAT after reading %d packet%s\n",
-                   *num_read,(*num_read==1?"":"s"));
+        printf("Found PAT after reading %d packet%s\n",
+               *num_read,(*num_read==1?"":"s"));
 
       if (payload_len == 0)
       {
-        print_err("### Packet is PAT, but has no payload\n");
+        KLOG("### Packet is PAT, but has no payload\n");
         if (pat_data) free(pat_data);
         return 1;
       }
@@ -3663,13 +3184,13 @@ extern int find_pat(TS_reader_p     tsreader,
       if (payload_unit_start_indicator && pat_data)
       {
         // Lose any data we started but didn't complete
-        print_err("!!! Discarding previous (uncompleted) PAT data\n");
+        KLOG("!!! Discarding previous (uncompleted) PAT data\n");
         free(pat_data);
         pat_data = NULL; pat_data_len = 0; pat_data_used = 0;
       }
       else if (!payload_unit_start_indicator && !pat_data)
       {
-        print_err("!!! Discarding PAT continuation, no PAT started\n");
+        KLOG("!!! Discarding PAT continuation, no PAT started\n");
         continue;
       }
 
@@ -3677,8 +3198,8 @@ extern int find_pat(TS_reader_p     tsreader,
                            &pat_data,&pat_data_len,&pat_data_used);
       if (err)
       {
-        fprint_err("### Error %s PAT\n",
-                   (payload_unit_start_indicator?"starting new":"continuing"));
+        KLOG("### Error %s PAT\n",
+                (payload_unit_start_indicator?"starting new":"continuing"));
         if (pat_data) free(pat_data);
         return 1;
       }
@@ -3693,7 +3214,7 @@ extern int find_pat(TS_reader_p     tsreader,
     
     if (max > 0 && *num_read >= max)
     {
-      if (!quiet) fprint_msg("Stopping after %d TS packets\n",max);
+      if (!quiet) printf("Stopping after %d TS packets\n",max);
       if (pat_data) free(pat_data);
       return EOF;
     }
@@ -3705,9 +3226,6 @@ extern int find_pat(TS_reader_p     tsreader,
  *
  * - `tsreader` is the TS packet reading context
  * - `pmt_pid` is the PID of the PMT we are looking for
- * - if `program_number` is -1, then any PMT with that PID is acceptable,
- *   otherwise we're only interested in a PMT with that PID and the given
- *   program number.
  * - if `max` is non-zero, then it is the maximum number of TS packets to read
  * - if `verbose` is true, then output extra information
  * - if `quiet` is true, then don't output normal informational messages
@@ -3719,13 +3237,12 @@ extern int find_pat(TS_reader_p     tsreader,
  * 1 if something else went wrong.
  */
 extern int find_next_pmt(TS_reader_p     tsreader,
-                         uint32_t        pmt_pid,
-                         int             program_number,
-                         int             max,
-                         int             verbose,
-                         int             quiet,
-                         int            *num_read,
-                         pmt_p		*pmt)
+			 uint32_t        pmt_pid,
+			 int             max,
+			 int             verbose,
+			 int             quiet,
+			 int            *num_read,
+			 pmt_p		*pmt)
 {
   int    err;
   byte  *pmt_data = NULL;
@@ -3734,7 +3251,7 @@ extern int find_next_pmt(TS_reader_p     tsreader,
 
   *pmt = NULL;
   *num_read = 0;
-  if (!quiet) print_msg("Locating next PMT\n");
+  if (!quiet) printf("Locating next PMT\n");
 
   for (;;)
   {
@@ -3753,7 +3270,7 @@ extern int find_next_pmt(TS_reader_p     tsreader,
     }
     else if (err)
     {
-      print_err("### Error reading TS packet\n");
+      KLOG("### Error reading TS packet\n");
       if (pmt_data) free(pmt_data);
       return 1;
     }
@@ -3763,14 +3280,14 @@ extern int find_next_pmt(TS_reader_p     tsreader,
     if (pid == pmt_pid)
     {
       if (!quiet)
-        fprint_msg("Found %s PMT with PID %04x (%d) after reading %d packet%s\n",
-                   (payload_unit_start_indicator?"start of":"more of"),
+        printf("Found %s PMT with PID %04x (%d) after reading %d packet%s\n",
+               (payload_unit_start_indicator?"start of":"more of"),
                pid,pid,*num_read,(*num_read==1?"":"s"));
 
       if (payload_len == 0)
       {
-        fprint_err("### Packet is PMT with PID %04x (%d),"
-                   " but has no payload\n",pid,pid);
+        KLOG("### Packet is PMT with PID %04x (%d),"
+                " but has no payload\n",pid,pid);
         if (pmt_data) free(pmt_data);
         return 1;
       }
@@ -3778,13 +3295,13 @@ extern int find_next_pmt(TS_reader_p     tsreader,
       if (payload_unit_start_indicator && pmt_data)
       {
         // Lose any data we started but didn't complete
-        print_err("!!! Discarding previous (uncompleted) PMT data\n");
+        KLOG("!!! Discarding previous (uncompleted) PMT data\n");
         free(pmt_data);
         pmt_data = NULL; pmt_data_len = 0; pmt_data_used = 0;
       }
       else if (!payload_unit_start_indicator && !pmt_data)
       {
-        print_err("!!! Discarding PMT continuation, no PMT started\n");
+        KLOG("!!! Discarding PMT continuation, no PMT started\n");
         continue;
       }
 
@@ -3792,44 +3309,23 @@ extern int find_next_pmt(TS_reader_p     tsreader,
                            &pmt_data,&pmt_data_len,&pmt_data_used);
       if (err)
       {
-        fprint_err("### Error %s PMT\n",
-                   (payload_unit_start_indicator?"starting new":"continuing"));
+        KLOG("### Error %s PMT\n",
+                (payload_unit_start_indicator?"starting new":"continuing"));
         if (pmt_data) free(pmt_data);
         return 1;
       }
 
       if (pmt_data_len == pmt_data_used)
       {
-        int pmt_program_number;
-
         err = extract_pmt(verbose,pmt_data,pmt_data_len,pid,pmt);
-        pmt_program_number = *pmt == NULL ? -1 : (int)((*pmt)->program_number);
-
-        if (pmt_data)
-        {  
-          free(pmt_data);
-          pmt_data = NULL;
-        }
-
-        // Check we've got the right program number - it would appear to be
-        // legitimate to have multiple PMTs carried in the same PID and some
-        // abuse of this appears to happen in real life
-        if (err == 0 && program_number >= 0)
-        {
-          if (pmt_program_number != program_number)
-          {
-            fprint_err("!!! Discarding PMT with program number %d\n", pmt_program_number);
-            free_pmt(pmt);
-            continue;
-          }
-        }
+        if (pmt_data) free(pmt_data);
         return err;
       }
     }
 
     if (max > 0 && *num_read >= max)
     {
-      if (!quiet) fprint_msg("Stopping after %d TS packets\n",max);
+      if (!quiet) printf("Stopping after %d TS packets\n",max);
       if (pmt_data) free(pmt_data);
       return EOF;
     }
@@ -3856,7 +3352,6 @@ extern int find_next_pmt(TS_reader_p     tsreader,
  * programs, 1 if something else went wrong.
  */
 extern int find_pmt(TS_reader_p     tsreader,
-        const int       req_prog_no,
 		    int             max,
 		    int             verbose,
 		    int             quiet,
@@ -3865,91 +3360,68 @@ extern int find_pmt(TS_reader_p     tsreader,
 {
   int  err;
   pidint_list_p  prog_list = NULL;
+  uint32_t       pmt_pid;
   int            sofar;
-  int            prog_index = 0;
-  int            prog_no = 0;
 
   *pmt = NULL;
 
   err = find_pat(tsreader,max,verbose,quiet,&sofar,&prog_list);
-
   if (err == EOF)
   {
-    if (!quiet) print_msg("No PAT found\n");
+    if (!quiet) printf("No PAT found\n");
     return 1;
   }
   else if (err)
   {
-    print_err("### Error finding PAT\n");
+    KLOG("### Error finding PAT\n");
     return 1;
   }
 
   if (!quiet)
   {
-    print_msg("\n");
+    printf("\n");
     report_pidint_list(prog_list,"Program list","Program",FALSE);
-    print_msg("\n");
+    printf("\n");
   }
 
   if (prog_list->length == 0)
   {
-    if (!quiet) fprint_msg("No programs defined in PAT (packet %d)\n",sofar);
+    if (!quiet) printf("No programs defined in PAT (packet %d)\n",sofar);
     return -2;
   }
   else if (prog_list->length > 1 && !quiet)
-  {
-    if (req_prog_no == 1)
-      print_msg("Multiple programs in PAT - using the first non-zero\n\n");
-    else
-      fprint_msg("Multiple programs in PAT - program %d\n\n", req_prog_no);
-  }
+    printf("Multiple programs in PAT - using the first non-zero\n\n");
 
-  for (prog_index = 0; prog_index < prog_list->length; ++prog_index)
-  {
-    if (prog_list->number[prog_index] == 0)
-      continue;
-    if (++prog_no == req_prog_no)
-      break;
-  }
+  pmt_pid = prog_list->pid[0];
+  if (prog_list->number[0] == 0 && prog_list->length > 1)
+	  pmt_pid = prog_list->pid[1];
 
-  if (prog_no == 0)
-  {
-    fprint_msg("No non-zero program_numbers in PAT (packet %d)\n",sofar);
-    return -2;
-  }
-  if (prog_no != req_prog_no)
-  {
-    fprint_msg("Unable to find program %d in PAT, only found %d (packet %d)\n", req_prog_no, prog_no, sofar);
-    return -2;
-  }
+  free_pidint_list(&prog_list);
 
   // Amend max to take account of the packets we've already read
   max -= sofar;
 
-  err = find_next_pmt(tsreader,prog_list->pid[prog_index],prog_list->number[prog_index],
-                      max,verbose,quiet,num_read,pmt);
-
-  free_pidint_list(&prog_list);
+  err = find_next_pmt(tsreader,pmt_pid,max,verbose,quiet,num_read,pmt);
 
   *num_read += sofar;
 
   if (err == EOF)
   {
-    if (!quiet) print_msg("No PMT found\n");
+    if (!quiet) printf("No PMT found\n");
     return EOF;
   }
   else if (err)
   {
-    print_err("### Error finding PMT\n");
+    KLOG("### Error finding PMT\n");
     return 1;
   }
 
   if (!quiet)
   {
-    print_msg("\n");
-    print_msg("Program map\n");
-    report_pmt(TRUE,"  ",*pmt);
-    print_msg("\n");
+    printf("\n");
+    printf("Program map\n");
+    report_pmt(stdout,"  ",*pmt);
+    printf("\n");
   }
   return 0;
 }

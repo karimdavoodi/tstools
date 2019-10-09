@@ -41,7 +41,6 @@
 
 #include "compat.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "l2audio_fns.h"
 
 #define DEBUG 0
@@ -141,11 +140,9 @@ static int peek_frame_header(const uint32_t header)
 //  byte 		protected, private;
 //  byte		mode, modex, copyright, original, emphasis;
   unsigned int	bitrate_enc, sampling_enc;
-  unsigned int bitrate;
-//  unsigned int sampling;
-  byte rate;
-//  unsigned int framesize
-  unsigned int framelen;
+  unsigned int	bitrate, sampling;
+  byte		rate;
+  unsigned int	framesize, framelen;
 
   // Version:
   //   00 - MPEG Version 2.5
@@ -155,7 +152,7 @@ static int peek_frame_header(const uint32_t header)
   version = (header >> 19) & 0x03;
   if (version == 1)
   {
-    print_err("### Illegal version (1) in MPEG layer 2 audio header\n");
+    KLOG("### Illegal version (1) in MPEG layer 2 audio header\n");
     return -1;
   }
   version = (version == 3) ? 1: (version == 2) ? 2: 3;
@@ -168,7 +165,7 @@ static int peek_frame_header(const uint32_t header)
   layer = (header >> 17) & 0x03;
   if (layer == 0)
   {
-    print_err("### Illegal layer (0) in MPEG layer 2 audio header\n");
+    KLOG("### Illegal layer (0) in MPEG layer 2 audio header\n");
     return -1;
   }
   layer = 4 - layer;
@@ -180,15 +177,15 @@ static int peek_frame_header(const uint32_t header)
   bitrate_enc = (header >> 12) & 0x0f;
   if (bitrate_enc == 0x0f)
   {
-    print_err("### Illegal bitrate_enc (0x0f) in MPEG layer 2 audio header\n");
+    KLOG("### Illegal bitrate_enc (0x0f) in MPEG layer 2 audio header\n");
     return -1;
   }
 
   bitrate = (bitrate_table[version-1][layer-1])[bitrate_enc];
   if (bitrate == 0) // bitrate now in kbits per channel
   {
-    print_err("### Illegal bitrate (0 kbits/channel) in MPEG level 2"
-              " audio header\n");
+    KLOG("### Illegal bitrate (0 kbits/channel) in MPEG level 2"
+            " audio header\n");
     return -1;
   }
 
@@ -196,10 +193,10 @@ static int peek_frame_header(const uint32_t header)
   sampling_enc = (header >> 10) & 0x03;
   if (sampling_enc == 3)
   {
-    print_err("### Illegal sampleing_enc (3) in MPEG layer 2 audio header\n");
+    KLOG("### Illegal sampleing_enc (3) in MPEG layer 2 audio header\n");
     return -1;
   }
-//  sampling = sampling_table[version-1][sampling_enc];
+  sampling = sampling_table[version-1][sampling_enc];
 
   // Make an AAC rate number from the rate number
   rate = (version * 3) + (sampling_enc & 2) + (sampling_enc == 0);
@@ -226,18 +223,18 @@ static int peek_frame_header(const uint32_t header)
   // (for the moment, we only *use* the frame length)
   if (layer == 1)
   {
-//    framesize = 384; // samples
+    framesize = 384; // samples
     framelen  = (12000 * bitrate / aud_frame_rate_n[rate] + padding) * 4;
   }
   else if (version == 1)
   {
-//    framesize = 1152; // samples
+    framesize = 1152; // samples
     framelen  = (144000 * bitrate / aud_frame_rate_n[rate] + padding);
   }
   else
   {
-//    framesize = 576; // samples
-    framelen  = (72000 * bitrate / aud_frame_rate_n[rate] + padding);
+	  framesize = 576; // samples
+	  framelen  = (72000 * bitrate / aud_frame_rate_n[rate] + padding);
   }
   return framelen;
 }
@@ -252,7 +249,7 @@ static inline int build_audio_frame(audio_frame_p  *frame)
   audio_frame_p  new = malloc(SIZEOF_AUDIO_FRAME);
   if (new == NULL)
   {
-    print_err("### Unable to allocate audio frame datastructure\n");
+    KLOG("### Unable to allocate audio frame datastructure\n");
     return 1;
   }
 
@@ -287,7 +284,7 @@ extern int read_next_l2audio_frame(int             file,
 
   offset_t  posn = tell_file(file);
 #if DEBUG
-  fprint_msg("Offset: " OFFSET_T_FORMAT "\n",posn);
+  printf("Offset: " OFFSET_T_FORMAT "\n",posn);
 #endif
 
   err = read_bytes(file,JUST_ENOUGH,header);
@@ -295,27 +292,28 @@ extern int read_next_l2audio_frame(int             file,
     return EOF;
   else if (err)
   {
-    fprint_err("### Error reading header bytes of MPEG layer 2 audio frame\n"
-               "    (in frame starting at " OFFSET_T_FORMAT ")\n",posn);
+    KLOG("### Error reading header bytes of MPEG layer 2 audio frame\n");
+    KLOG("    (in frame starting at " OFFSET_T_FORMAT ")\n",posn);
     free(data);
     return 1;
   }
 
 #if DEBUG
-  print_msg("MPEG layer 2 frame\n");
-  print_data(TRUE,"Start",header,JUST_ENOUGH,JUST_ENOUGH);
+  printf("MPEG layer 2 frame\n");
+  print_data(stdout,"Start",header,JUST_ENOUGH,JUST_ENOUGH);
 #endif
 
   while (header[0] != 0xFF || (header[1] & 0xe0) != 0xe0)
   {
     int skip = JUST_ENOUGH;
-    fprint_err("### MPEG layer 2 audio frame does not start with '1111 1111 111x'\n"
-               "    syncword - lost synchronisation?\n"
-               "    Found 0x%X%X%X instead of 0xFFE\n",
-               (header[0] & 0xF0) >> 4,
-               (header[0] & 0x0F),
-               (header[1] & 0xe0) >> 4);
-    fprint_err("    (in frame starting at " OFFSET_T_FORMAT ")\n",posn);
+    KLOG(
+            "### MPEG layer 2 audio frame does not start with '1111 1111 111x'\n"
+            "    syncword - lost synchronisation?\n"
+            "    Found 0x%X%X%X instead of 0xFFE\n",
+            (header[0] & 0xF0) >> 4,
+            (header[0] & 0x0F),
+            (header[1] & 0xe0) >> 4);
+    KLOG("    (in frame starting at " OFFSET_T_FORMAT ")\n",posn);
     do
     {
       err = read_bytes(file,1,header);
@@ -332,20 +330,20 @@ extern int read_next_l2audio_frame(int             file,
       }
     } while (!err);
     if (err) return 1;
-    fprint_err("#################### Resuming after %d skipped bytes\n",skip);
+    KLOG("#################### Resuming after %d skipped bytes\n",skip);
   }
 
   frame_length = peek_frame_header((header[1] << 16) | (header[2] << 8) | header[3]);
   if (frame_length < 1)
   {
-    print_err("### Bad MPEG layer 2 audio header\n");
+    KLOG("### Bad MPEG layer 2 audio header\n");
     return 1;
   }
 
   data = malloc(frame_length);
   if (data == NULL)
   {
-    print_err("### Unable to extend data buffer for MPEG layer 2 audio frame\n");
+    KLOG("### Unable to extend data buffer for MPEG layer 2 audio frame\n");
     free(data);
     return 1;
   }
@@ -357,9 +355,9 @@ extern int read_next_l2audio_frame(int             file,
   if (err)
   {
     if (err == EOF)
-      print_err("### Unexpected EOF reading rest of MPEG layer 2 audio frame\n");
+      KLOG("### Unexpected EOF reading rest of MPEG layer 2 audio frame\n");
     else
-      print_err("### Error reading rest of MPEG layer 2 audio frame\n");
+      KLOG("### Error reading rest of MPEG layer 2 audio frame\n");
     free(data);
     return 1;
   }

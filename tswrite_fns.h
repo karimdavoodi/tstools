@@ -167,19 +167,16 @@ extern int tswrite_wait_for_client(int           server_socket,
  *
  * Returns 0 if all went well, 1 if something went wrong.
  */
-
 extern int tswrite_start_buffering(TS_writer_p  tswriter,
                                    int          circ_buf_size,
                                    int          TS_in_packet,
                                    int          maxnowait,
                                    int          waitfor,
                                    int          byterate,
-                                   tswrite_pcr_mode pcr_mode,
+                                   int          use_pcrs,
                                    int          prime_size,
                                    int          prime_speedup,
-                                   double       pcr_scale,
-                                   const tswrite_pkt_hdr_type_t hdr_type);
-
+                                   double       pcr_scale);
 /*
  * Set up internal buffering for TS output. This is necessary for UDP output,
  * and optional otherwise.
@@ -291,23 +288,21 @@ extern int tswrite_write(TS_writer_p  tswriter,
                          int          got_pcr,
                          uint64_t     pcr);
 
-extern int tswrite_discontinuity(const TS_writer_p  tswriter);
-
 /*
  * Write a usage string (to standard output) describing the tuning
  * options processed by tswrite_process_args.
  */
-extern void tswrite_help_tuning(void);
+extern void tswrite_help_tuning();
 /*
  * Write a usage string (to standard output) describing the testing
  * options processed by tswrite_process_args.
  */
-extern void tswrite_help_testing(void);
+extern void tswrite_help_testing();
 /*
  * Write a usage string (to standard output) describing the
  * debugging options processed by tswrite_process_args.
  */
-extern void tswrite_help_debug(void);
+extern void tswrite_help_debug();
 /*
  * Report on the values within our argument context.
  *

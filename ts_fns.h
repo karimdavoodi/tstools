@@ -386,26 +386,11 @@ extern int read_next_TS_packet(TS_reader_p  tsreader,
 // Keeps a PCR in hand, so that it has accurate timing information
 // for each TS packet
 // ------------------------------------------------------------
-/* Set up the the "looping" buffered TS packet reader and let it know what its
- * PCR PID is.
- *
- * This must be called before any other _buffered_TS_packet function.
- *
- * - `pcr_pid` is the PID within which we should look for PCR entries
- *
- * Returns 0 if all went well, 1 if something went wrong (allocating space
- * for the TS PCR buffer).
- */
-extern int prime_read_buffered_TS_packet(TS_reader_p  tsreader,
-                                         uint32_t     pcr_pid);
 /* Retrieve the first TS packet from the PCR read-ahead buffer,
  * complete with its calculated PCR time.
  *
- * prime_read_buffered_TS_packet() must have been called before this.
- *
  * This should be called the first time a TS packet is to be read
- * using the PCR read-ahead buffer. It "primes" the read-ahead mechanism
- * by performing the first actual read-ahead.
+ * using the PCR read-ahead buffer. It "primes" the read-ahead mechanism.
  *
  * - `pcr_pid` is the PID within which we should look for PCR entries
  * - `start_count` is the index of the current (last read) TS entry (which will
@@ -446,14 +431,19 @@ extern int read_first_TS_packet_from_buffer(TS_reader_p  tsreader,
 extern int read_next_TS_packet_from_buffer(TS_reader_p  tsreader,
                                            byte        *data[TS_PACKET_SIZE],
                                            uint32_t    *pid,
-                                           uint64_t    *pcr);
+                                           uint64_t    *pcr,
+                                   int *play_forward,int *play_backward);
+/* Let the "looping" buffered TS packet reader know what its PCR PID is
+ *
+ * Call this before the first call of read_buffered_TS_packet().
+ *
+ * - `pcr_pid` is the PID within which we should look for PCR entries
+ */
+extern void prime_read_buffered_TS_packet(uint32_t     pcr_pid);
 /*
  * Read the next TS packet, coping with looping, etc.
  *
  * prime_read_buffered_TS_packet() should have been called first.
- *
- * This is a convenience wrapper around read_first_TS_packet_from_buffer()
- * and read_next_TS_packet_from_buffer().
  *
  * This differs from ``read_TS_packet`` in that it assumes that the
  * underlying code will already have read to the next PCR, so that
@@ -485,7 +475,8 @@ extern int read_buffered_TS_packet(TS_reader_p  tsreader,
                                    int          loop,
                                    offset_t     start_posn,
                                    uint32_t     start_count,
-                                   int          quiet);
+                                   int          quiet,
+                                   int *play_forward,int *play_backward);
 
 // ------------------------------------------------------------
 // Packet interpretation
@@ -549,7 +540,7 @@ extern void report_payload(int         show_data,
  * Print out information about program descriptors
  * (either from the PMT program info, or the PMT/stream ES info)
  *
- * - if `is_msg` then print as a message, otherwise as an error
+ * - `stream` is the stream to print on
  * - `leader1` and `leader2` are the text to write at the start of each line
  *   (either or both may be NULL)
  * - `desc_data` is the data containing the descriptors
@@ -557,7 +548,7 @@ extern void report_payload(int         show_data,
  *
  * Returns 0 if all went well, 1 if something went wrong
  */
-extern int print_descriptors(int    is_msg,
+extern int print_descriptors(FILE  *stream,
                              char  *leader1,
                              char  *leader2,
                              byte  *desc_data,
@@ -740,9 +731,6 @@ extern int find_pat(TS_reader_p     tsreader,
  *
  * - `tsreader` is the TS packet reading context
  * - `pmt_pid` is the PID of the PMT we are looking for
- * - if `program_number` is -1, then any PMT with that PID is acceptable,
- *   otherwise we're only interested in a PMT with that PID and the given
- *   program number.
  * - if `max` is non-zero, then it is the maximum number of TS packets to read
  * - if `verbose` is true, then output extra information
  * - if `quiet` is true, then don't output normal informational messages
@@ -755,7 +743,6 @@ extern int find_pat(TS_reader_p     tsreader,
  */
 extern int find_next_pmt(TS_reader_p     tsreader,
                          uint32_t        pmt_pid,
-                         int             program_number,
                          int             max,
                          int             verbose,int             quiet,
                          int            *num_read,
@@ -780,7 +767,6 @@ extern int find_next_pmt(TS_reader_p     tsreader,
  * programs, 1 if something else went wrong.
  */
 extern int find_pmt(TS_reader_p     tsreader,
-                    const int req_prog_no,
                     int             max,
                     int             verbose,
                     int             quiet,

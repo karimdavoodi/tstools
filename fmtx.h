@@ -39,7 +39,6 @@ typedef char TCHAR;
 #define I64FMT "ll"
 #define I64K(x) x##LL
 #define _stprintf sprintf
-#define _sntprintf snprintf
 #define _tcscmp strcmp
 #endif
 

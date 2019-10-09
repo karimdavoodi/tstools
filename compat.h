@@ -55,8 +55,6 @@ typedef unsigned __int64        uint64_t;
 
 typedef uint8_t                 byte;
 
-#define INT64_MIN        (-9223372036854775807i64 - 1)
-
 // On BSD, lseek takes a 64-bit off_t value
 // On Linux, if the system supports long files, it does the same
 // On Windows, one has the choice of _lseek or _lseeki64
@@ -115,7 +113,6 @@ typedef uint8_t  byte;
 //     do both, here, for safety.
 #include <sys/types.h>
 #include <unistd.h>
-#include <inttypes.h>
 typedef off_t offset_t;
 
 #if defined(__linux__) && !defined(__USE_FILE_OFFSET64)
@@ -127,14 +124,14 @@ typedef off_t offset_t;
 #else
 // On Unices, printf supports %lld for 64 bit integers, and this is suitable
 // for printing out offset_t when it is 64 bit
-#define OFFSET_T_FORMAT    "%" PRIi64
-#define OFFSET_T_FORMAT_08 "%08" PRIi64     // deprecated, because it looks like hex/octal
-#define OFFSET_T_FORMAT_8  "%8" PRIi64
+#define OFFSET_T_FORMAT    "%lld"
+#define OFFSET_T_FORMAT_08 "%08lld"     // deprecated, because it looks like hex/octal
+#define OFFSET_T_FORMAT_8  "%8lld"
 #endif
 
 // Whilst we're at it, define the format for a 64 bit integer as such
-#define LLD_FORMAT  "%" PRId64
-#define LLU_FORMAT  "%" PRIu64
+#define LLD_FORMAT  "%lld"
+#define LLU_FORMAT  "%llu"
 #define LLD_FORMAT_STUMP "lld"
 #define LLU_FORMAT_STUMP "llu"
 
@@ -155,6 +152,9 @@ typedef void *   void_p;
 #define DEFAULT_VIDEO_PID  0x68
 #define DEFAULT_AUDIO_PID  0x67
 #define DEFAULT_PMT_PID    0x66
+#include<syslog.h>
+//#define KLOG(a, ... )  printf(a, ##__VA_ARGS__ )
+#define KLOG(a, ...)  syslog(LOG_NOTICE,a, ##__VA_ARGS__)
 
 #endif /* _compat */
 

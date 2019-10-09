@@ -42,7 +42,6 @@
 #include "compat.h"
 #include "ts_fns.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "pidint_fns.h"
 #include "es_fns.h"
 #include "pes_fns.h"
@@ -76,22 +75,23 @@ static int extract_av_via_pes(char  *input_name,
 
   if (!want_video)
   {
-    print_err("### Audio output is not supported via PES in this utility\n");
+    KLOG(
+            "### Audio output is not supported via PES in this utility\n");
     return 1;
   }
 
   output = fopen(output_name,"wb");
   if (output == NULL)
   {
-    fprint_err("### Unable to open output file %s: %s\n",output_name,
-               strerror(errno));
+    KLOG("### Unable to open output file %s: %s\n",output_name,
+            strerror(errno));
     return 1;
   }
   
   err = open_PES_reader(input_name,!quiet,!quiet,&reader);
   if (err)
   {
-    fprint_err("### Error opening file %s\n",input_name);
+    KLOG("### Error opening file %s\n",input_name);
     fclose(output);
     return 1;
   }
@@ -102,7 +102,7 @@ static int extract_av_via_pes(char  *input_name,
   err = build_elementary_stream_PES(reader,&es);
   if (err)
   {
-    print_err("### Error trying to build ES reader from PES reader\n");
+    KLOG("### Error trying to build ES reader from PES reader\n");
     (void) close_PES_reader(&reader);
     (void) fclose(output);
     return 1;
@@ -116,7 +116,7 @@ static int extract_av_via_pes(char  *input_name,
       break;
     else if (err)
     {
-      print_err("### Error reading next ES unit\n");
+      KLOG("### Error reading next ES unit\n");
       (void) fclose(output);
       (void) close_PES_reader(&reader);
       close_elementary_stream(&es);
@@ -125,7 +125,7 @@ static int extract_av_via_pes(char  *input_name,
     err = write_ES_unit(output,unit);
     if (err)
     {
-      print_err("### Error writing ES unit out to file\n");
+      KLOG("### Error writing ES unit out to file\n");
       free_ES_unit(&unit);
       (void) fclose(output);
       (void) close_PES_reader(&reader);
@@ -171,7 +171,7 @@ static int extract_pid_packets(TS_reader_p  tsreader,
     
     if (max > 0 && count >= max)
     {
-      if (!quiet) fprint_msg("Stopping after %d packets\n",max);
+      if (!quiet) printf("Stopping after %d packets\n",max);
       break;
     }
 
@@ -182,7 +182,7 @@ static int extract_pid_packets(TS_reader_p  tsreader,
       break;
     else if (err)
     {
-      print_err("### Error reading TS packet\n");
+      KLOG("### Error reading TS packet\n");
       return 1;
     }
     
@@ -200,12 +200,12 @@ static int extract_pid_packets(TS_reader_p  tsreader,
 
       if (verbose)
       {
-        fprint_msg("%4d: TS Packet PID %04x",count,pid);
+        printf("%4d: TS Packet PID %04x",count,pid);
         if (payload_unit_start_indicator)
-          print_msg(" (start)");
+          printf(" (start)");
         else if (need_packet_start)
-          print_msg(" <ignored>");
-        print_msg("\n");
+          printf(" <ignored>");
+        printf("\n");
       }
 
 
@@ -218,7 +218,7 @@ static int extract_pid_packets(TS_reader_p  tsreader,
           need_packet_start = FALSE;
 
         pes_packet_len = (payload[4] << 8) | payload[5];
-        if (verbose) fprint_msg("PES packet length %d\n",pes_packet_len);
+        if (verbose) printf("PES packet length %d\n",pes_packet_len);
         got_pes_packet_len = (pes_packet_len > 0);
 
         if (IS_H222_PES(payload))
@@ -234,7 +234,7 @@ static int extract_pid_packets(TS_reader_p  tsreader,
         }
         data = &payload[offset];
         data_len = payload_len-offset;
-        if (verbose) print_data(TRUE,"data",data,data_len,1000);
+        if (verbose) print_data(stdout,"data",data,data_len,1000);
       }
       else
       {
@@ -247,7 +247,7 @@ static int extract_pid_packets(TS_reader_p  tsreader,
 
         data = payload;
         data_len = payload_len;
-        if (verbose) print_data(TRUE,"Data",payload,payload_len,1000);
+        if (verbose) print_data(stdout,"Data",payload,payload_len,1000);
 
         if (got_pes_packet_len)
         {
@@ -255,7 +255,7 @@ static int extract_pid_packets(TS_reader_p  tsreader,
           if (data_len > pes_packet_len)
           {
             data_len = pes_packet_len;
-            if (verbose) print_data(TRUE,"Reduced data",data,data_len,1000);
+            if (verbose) print_data(stdout,"Reduced data",data,data_len,1000);
             pes_packet_len = 0;
           }
           else
@@ -268,8 +268,8 @@ static int extract_pid_packets(TS_reader_p  tsreader,
         written = fwrite(data,data_len,1,output);
         if (written != 1)
         {
-          fprint_err("### Error writing TS packet - units written = %d\n",
-                     (int)written);
+          KLOG("### Error writing TS packet - units written = %d\n",
+                  (int)written);
           return 1;
         }
       }
@@ -278,15 +278,15 @@ static int extract_pid_packets(TS_reader_p  tsreader,
   }
 
   if (!quiet)
-    fprint_msg("Extracted %d of %d TS packet%s\n",
-               extracted,count,(count==1?"":"s"));
+    printf("Extracted %d of %d TS packet%s\n",
+           extracted,count,(count==1?"":"s"));
 
   // If the user has forgotten to say -pid XX, or -video/-audio,
   // and are piping the output to another program, it can be surprising
   // if there is no data!
   if (quiet && extracted == 0)
-    fprint_err("### No data extracted for PID %#04x (%d)\n",
-               pid_wanted,pid_wanted);
+    KLOG("### No data extracted for PID %#04x (%d)\n",
+            pid_wanted,pid_wanted);
   return 0;
 }
 
@@ -322,18 +322,18 @@ static int extract_av(int   input,
     if (max > 0 && max_to_read <= 0)
       break;
 
-    err = find_pmt(tsreader, 1, max_to_read,verbose,quiet,&num_read,&pmt);
+    err = find_pmt(tsreader,max_to_read,verbose,quiet,&num_read,&pmt);
     if (err == EOF)
     {
       if (!quiet)
-        print_msg("No program stream information in the input file\n");
+        printf("No program stream information in the input file\n");
       free_TS_reader(&tsreader);
       free_pmt(&pmt);
       return 0;
     }
     else if (err)
     {
-      print_err("### Error finding program stream information\n");
+      KLOG("### Error finding program stream information\n");
       free_TS_reader(&tsreader);
       free_pmt(&pmt);
       return 1;
@@ -363,15 +363,15 @@ static int extract_av(int   input,
 
   if (pid == 0)
   {
-    fprint_err("### No %s stream specified in first %d TS packets in input file\n",
-               (want_video?"video":"audio"),max);
+    KLOG("### No %s stream specified in first %d TS packets in input file\n",
+            (want_video?"video":"audio"),max);
     free_TS_reader(&tsreader);
     return 1;
   }
 
   if (!quiet)
-    fprint_msg("Extracting %s PID %04x (%d)\n",(want_video?"video":"audio"),
-               pid,pid);
+    printf("Extracting %s PID %04x (%d)\n",(want_video?"video":"audio"),
+           pid,pid);
 
   // Amend max to take account of the packets we've already read
   max -= total_num_read;
@@ -409,12 +409,12 @@ static int extract_pid(int          input,
 
 static void print_usage()
 {
-  print_msg(
+  printf(
     "Usage: ts2es [switches] [<infile>] [<outfile>]\n"
     "\n"
     );
   REPORT_VERSION("ts2es");
-  print_msg(
+  printf(
     "\n"
     "  Extract a single (elementary) program stream from a Transport Stream\n"
     "  (or Program Stream).\n"
@@ -432,11 +432,9 @@ static void print_usage()
     "                     named in the (first) PMT\n"
     "\n"
     "General switches:\n"
-    "  -err stdout        Write error messages to standard output (the default)\n"
-    "  -err stderr        Write error messages to standard error (Unix traditional)\n"
     "  -stdin             Input from standard input, instead of a file\n"
     "  -stdout            Output to standard output, instead of a file\n"
-    "                     Forces -quiet and -err stderr.\n"
+    "                     Forces -quiet.\n"
     "  -verbose, -v       Output informational/diagnostic messages\n"
     "  -quiet, -q         Only output error messages\n"
     "  -max <n>, -m <n>   Maximum number of TS packets to read\n"
@@ -532,28 +530,11 @@ int main(int argc, char **argv)
       {
         use_stdout = TRUE;
         had_output_name = TRUE;  // so to speak
-        redirect_output_stderr();
-      }
-      else if (!strcmp("-err",argv[ii]))
-      {
-        CHECKARG("ts2es",ii);
-        if (!strcmp(argv[ii+1],"stderr"))
-          redirect_output_stderr();
-        else if (!strcmp(argv[ii+1],"stdout"))
-          redirect_output_stdout();
-        else
-        {
-          fprint_err("### ts2es: "
-                     "Unrecognised option '%s' to -err (not 'stdout' or"
-                     " 'stderr')\n",argv[ii+1]);
-          return 1;
-        }
-        ii++;
       }
       else
       {
-        fprint_err("### ts2es: "
-                   "Unrecognised command line switch '%s'\n",argv[ii]);
+        KLOG("### ts2es: "
+                "Unrecognised command line switch '%s'\n",argv[ii]);
         return 1;
       }
     }
@@ -561,7 +542,7 @@ int main(int argc, char **argv)
     {
       if (had_input_name && had_output_name)
       {
-        fprint_err("### ts2es: Unexpected '%s'\n",argv[ii]);
+        KLOG("### ts2es: Unexpected '%s'\n",argv[ii]);
         return 1;
       }
       else if (had_input_name)  // shouldn't do this if had -stdout
@@ -580,14 +561,14 @@ int main(int argc, char **argv)
 
   if (!had_input_name)
   {
-    print_err("### ts2es: No input file specified\n");
+    KLOG("### ts2es: No input file specified\n");
     return 1;
   }
 
   if (!had_output_name)
   {
-    fprint_err("### ts2es: "
-               "No output file specified for %s\n",action_switch);
+    KLOG("### ts2es: "
+            "No output file specified for %s\n",action_switch);
     return 1;
   }
 
@@ -595,17 +576,17 @@ int main(int argc, char **argv)
   // Testing PES output
   if (use_pes && extract == EXTRACT_PID)
   {
-    print_err("### ts2es: -pid is not supported with -pes\n");
+    KLOG("### ts2es: -pid is not supported with -pes\n");
     return 1;
   }
   if (use_pes && use_stdout)
   {
-    print_err("### ts2es: -stdout is not supported with -pes\n");
+    KLOG("### ts2es: -stdout is not supported with -pes\n");
     return 1;
   }
   if (use_pes && use_stdin)
   {
-    print_err("### ts2es: -stdin is not supported with -pes\n");
+    KLOG("### ts2es: -stdin is not supported with -pes\n");
     return 1;
   }
   if (use_pes)
@@ -614,7 +595,7 @@ int main(int argc, char **argv)
                              quiet);
     if (err)
     {
-      print_err("### ts2es: Error writing via PES\n");
+      KLOG("### ts2es: Error writing via PES\n");
       return 1;
     }
     return 0;
@@ -635,12 +616,12 @@ int main(int argc, char **argv)
     input = open_binary_file(input_name,FALSE);
     if (input == -1)
     {
-      fprint_err("### ts2es: Unable to open input file %s\n",input_name);
+      KLOG("### ts2es: Unable to open input file %s\n",input_name);
       return 1;
     }
   }
   if (!quiet)
-    fprint_msg("Reading from %s\n",(use_stdin?"<stdin>":input_name));
+    printf("Reading from %s\n",(use_stdin?"<stdin>":input_name));
 
   if (had_output_name)
   {
@@ -652,26 +633,26 @@ int main(int argc, char **argv)
       if (output == NULL)
       {
         if (!use_stdin) (void) close_file(input);
-        fprint_err("### ts2es: "
-                   "Unable to open output file %s: %s\n",output_name,
-                   strerror(errno));
+        KLOG("### ts2es: "
+                "Unable to open output file %s: %s\n",output_name,
+               strerror(errno));
         return 1;
       }
     }
     if (!quiet)
-      fprint_msg("Writing to   %s\n",(use_stdout?"<stdout>":output_name));
+      printf("Writing to   %s\n",(use_stdout?"<stdout>":output_name));
   }
 
   if (!quiet)
   {
     if (extract == EXTRACT_PID)
-      fprint_msg("Extracting packets for PID %04x (%d)\n",pid,pid);
+      printf("Extracting packets for PID %04x (%d)\n",pid,pid);
     else
-      fprint_msg("Extracting %s\n",(extract==EXTRACT_VIDEO?"video":"audio"));
+      printf("Extracting %s\n",(extract==EXTRACT_VIDEO?"video":"audio"));
   }
   
   if (max && !quiet)
-    fprint_msg("Stopping after %d TS packets\n",max);
+    printf("Stopping after %d TS packets\n",max);
 
   if (extract == EXTRACT_PID)
     err = extract_pid(input,output,pid,max,verbose,quiet);
@@ -680,7 +661,7 @@ int main(int argc, char **argv)
                      max,verbose,quiet);
   if (err)
   {
-    print_err("### ts2es: Error extracting data\n");
+    KLOG("### ts2es: Error extracting data\n");
     if (!use_stdin)  (void) close_file(input);
     if (!use_stdout) (void) fclose(output);
     return 1;
@@ -693,8 +674,8 @@ int main(int argc, char **argv)
     err = fclose(output);
     if (err)
     {
-      fprint_err("### ts2es: Error closing output file %s: %s\n",
-                 output_name,strerror(errno));
+      KLOG("### ts2es: Error closing output file %s: %s\n",
+              output_name,strerror(errno));
       (void) close_file(input);
       return 1;
     }
@@ -703,7 +684,7 @@ int main(int argc, char **argv)
   {
     err = close_file(input);
     if (err)
-      fprint_err("### ts2es: Error closing input file %s\n",input_name);
+      KLOG("### ts2es: Error closing input file %s\n",input_name);
   }
   return 0;
 }

@@ -43,7 +43,6 @@
 #include "compat.h"
 #include "ps_fns.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "version.h"
 
 
@@ -72,7 +71,7 @@ static int report_ps_dots(PS_reader_p  ps,
   struct PS_pack_header header = {0};
 
   if (verbose)
-    print_msg("Characters represent the following:\n"
+    printf("Characters represent the following:\n"
            "    [    Pack header\n"
            "    H    System header\n"
            "    ]    MPEG_program_end_code\n"
@@ -92,22 +91,22 @@ static int report_ps_dots(PS_reader_p  ps,
   err = read_PS_packet_start(ps,FALSE,&posn,&stream_id);
   if (err == EOF)
   {
-    print_err("### Error reading first pack header\n");
-    print_err("    Unexpected end of PS at start of stream\n");
+    KLOG("### Error reading first pack header\n");
+    KLOG("    Unexpected end of PS at start of stream\n");
     return 1;
   }
   else if (err)
   {
-    print_err("### Error reading first pack header\n");
+    KLOG("### Error reading first pack header\n");
     return 1;
   }
 
   if (stream_id != 0xba)
   {
-    print_err("### Program stream does not start with pack header\n");
-    fprint_err("    First packet has stream id %02X (",stream_id);
-    print_stream_id(FALSE,stream_id);
-    print_err(")\n");
+    KLOG("### Program stream does not start with pack header\n");
+    KLOG("    First packet has stream id %02X (",stream_id);
+    print_stream_id(stdout,stream_id);
+    printf(")\n");
     return 1;
   }
 
@@ -118,19 +117,20 @@ static int report_ps_dots(PS_reader_p  ps,
 
     if (max > 0 && num_packs >= max)
     {
-      fprint_msg("\nStopping after %d packs\n",num_packs);
+      printf("\nStopping after %d packs\n",num_packs);
       return 0;
     }
 
     num_packs ++;
-    print_msg("[");
+    printf("[");
     fflush(stdout);
     
     err = read_PS_pack_header_body(ps,&header);
     if (err)
     {
-      fprint_err("### Error reading data for pack header starting at "
-                 OFFSET_T_FORMAT "\n",posn);
+      KLOG(
+              "### Error reading data for pack header starting at "
+              OFFSET_T_FORMAT "\n",posn);
       return 1;
     }
 
@@ -143,7 +143,7 @@ static int report_ps_dots(PS_reader_p  ps,
         end_of_file = TRUE;
         if (stream_id == 0xB9)
         {
-          print_msg("]");
+          printf("]");
           fflush(stdout);
         }
         break;
@@ -153,13 +153,14 @@ static int report_ps_dots(PS_reader_p  ps,
 
       if (stream_id == 0xbb) // System header
       {
-        print_msg("H");
+        printf("H");
         fflush(stdout);
         err = read_PS_packet_body(ps,stream_id,&packet);
         if (err)
         {
-          fprint_err("### Error reading system header starting at "
-                     OFFSET_T_FORMAT "\n",posn);
+          KLOG(
+                  "### Error reading system header starting at "
+                  OFFSET_T_FORMAT "\n",posn);
           return 1;
         }
         // For the moment, just ignore the system header content
@@ -178,40 +179,40 @@ static int report_ps_dots(PS_reader_p  ps,
         break;
 
       if (stream_id == 0xBC)
-        print_msg("M");
+        printf("M");
       else if (stream_id == 0xFF)
-        print_msg("D");
+        printf("D");
       else if (stream_id == 0xBD)
-        print_msg("p1");
+        printf("p1");
       else if (stream_id == 0xBE)
-        print_msg(".");
+        printf(".");
       else if (stream_id == 0xBF)
-        print_msg("p2");
+        printf("p2");
       else if (stream_id >= 0xC0 && stream_id <=0xDF)
       {
         int number = stream_id & 0x1F;
         if (number == 0)
-          print_msg("a");
+          printf("a");
         else
-          fprint_msg("a%x",number);
+          printf("a%x",number);
       }
       else if (stream_id >= 0xE0 && stream_id <= 0xEF)
       {
         int number = stream_id & 0x0F;
         if (number == 0)
-          print_msg("v");
+          printf("v");
         else
-          fprint_msg("v%x",number);
+          printf("v%x",number);
       }
       else
-        print_msg("?");
+        printf("?");
       fflush(stdout);
 
       err = read_PS_packet_body(ps,stream_id,&packet);
       if (err)
       {
-        fprint_err("### Error reading PS packet starting at "
-                   OFFSET_T_FORMAT "\n",posn);
+        KLOG("### Error reading PS packet starting at "
+                OFFSET_T_FORMAT "\n",posn);
         return 1;
       }
 
@@ -220,7 +221,7 @@ static int report_ps_dots(PS_reader_p  ps,
       {
         if (stream_id == 0xB9)
         {
-          print_msg("]");
+          printf("]");
           fflush(stdout);
         }
         end_of_file = TRUE;
@@ -235,20 +236,20 @@ static int report_ps_dots(PS_reader_p  ps,
   }
 
   clear_PS_packet(&packet);
-  fprint_msg("\nRead %d PS packet%s in %d pack%s\n",
-             count,(count==1?"":"s"),
-             num_packs,(num_packs==1?"":"s"));
+  printf("\nRead %d PS packet%s in %d pack%s\n",
+         count,(count==1?"":"s"),
+         num_packs,(num_packs==1?"":"s"));
   return 0;
 }
 
 static void print_usage()
 {
-  print_msg(
+  printf(
     "Usage: psdots [switches] [<infile>]\n"
     "\n"
     );
   REPORT_VERSION("psdots");
-  print_msg(
+  printf(
     "\n"
     "  Present the content of a Program Stream file as a sequence of\n"
     "  characters, representing the packets.\n"
@@ -257,8 +258,6 @@ static void print_usage()
     "  <infile>  is an H.222 Program Stream file (but see -stdin)\n"
     "\n"
     "Switches:\n"
-    "  -err stdout        Write error messages to standard output (the default)\n"
-    "  -err stderr        Write error messages to standard error (Unix traditional)\n"
     "  -stdin             Input from standard input, instead of a file\n"
     "  -verbose, -v       Output a description of the characters used\n"
     "  -max <n>, -m <n>   Maximum number of PS packets to read\n"
@@ -294,22 +293,6 @@ int main(int argc, char **argv)
         print_usage();
         return 0;
       }
-      else if (!strcmp("-err",argv[ii]))
-      {
-        CHECKARG("psdots",ii);
-        if (!strcmp(argv[ii+1],"stderr"))
-          redirect_output_stderr();
-        else if (!strcmp(argv[ii+1],"stdout"))
-          redirect_output_stdout();
-        else
-        {
-          fprint_err("### psdots: "
-                     "Unrecognised option '%s' to -err (not 'stdout' or"
-                     " 'stderr')\n",argv[ii+1]);
-          return 1;
-        }
-        ii++;
-      }
       else if (!strcmp("-verbose",argv[ii]) || !strcmp("-v",argv[ii]))
       {
         verbose = TRUE;
@@ -328,8 +311,8 @@ int main(int argc, char **argv)
       }
       else
       {
-        fprint_err("### psdots: "
-                   "Unrecognised command line switch '%s'\n",argv[ii]);
+        KLOG("### psdots: "
+                "Unrecognised command line switch '%s'\n",argv[ii]);
         return 1;
       }
     }
@@ -337,7 +320,7 @@ int main(int argc, char **argv)
     {
       if (had_input_name)
       {
-        fprint_err("### psdots: Unexpected '%s'\n",argv[ii]);
+        KLOG("### psdots: Unexpected '%s'\n",argv[ii]);
         return 1;
       }
       else
@@ -351,7 +334,7 @@ int main(int argc, char **argv)
 
   if (!had_input_name)
   {
-    print_err("### psdots: No input file specified\n");
+    KLOG("### psdots: No input file specified\n");
     return 1;
   }
 
@@ -359,25 +342,25 @@ int main(int argc, char **argv)
   err = open_PS_file(input_name,FALSE,&ps);
   if (err)
   {
-    fprint_err("### psdots: Unable to open input file %s\n",
-               (use_stdin?"<stdin>":input_name));
+    KLOG("### psdots: Unable to open input file %s\n",
+            (use_stdin?"<stdin>":input_name));
     return 1;
   }
-  fprint_msg("Reading from %s\n",(use_stdin?"<stdin>":input_name));
+  printf("Reading from %s\n",(use_stdin?"<stdin>":input_name));
 
   if (max)
-    fprint_msg("Stopping after %d PS packets\n",max);
+    printf("Stopping after %d PS packets\n",max);
 
   err = report_ps_dots(ps,max,verbose);
   if (err)
-    print_err("### psdots: Error reporting on input stream\n");
+    KLOG("### psdots: Error reporting on input stream\n");
 
 
   err = close_PS_file(&ps);
   if (err)
   {
-    fprint_err("### psdots: Error closing input file %s\n",
-               (use_stdin?"<stdin>":input_name));
+    KLOG("### psdots: Error closing input file %s\n",
+            (use_stdin?"<stdin>":input_name));
     return 1;
   }
   return 0;

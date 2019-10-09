@@ -32,7 +32,6 @@
 #include <string.h>
 
 #include "compat.h"
-#include "printing_fns.h"
 #include "misc_fns.h"
 #include "adts_fns.h"
 
@@ -67,7 +66,7 @@ extern int read_next_adts_frame(int            file,
 
   offset_t  posn = tell_file(file);
 #if DEBUG
-  fprint_msg("Offset: " OFFSET_T_FORMAT "\n",posn);
+  printf("Offset: " OFFSET_T_FORMAT "\n",posn);
 #endif
 
   err = read_bytes(file,JUST_ENOUGH,header);
@@ -75,37 +74,37 @@ extern int read_next_adts_frame(int            file,
     return EOF;
   else if (err)
   {
-    fprint_err("### Error reading header bytes of ADTS frame\n"
-               "    (in frame starting at " OFFSET_T_FORMAT ")\n",posn);
+    KLOG("### Error reading header bytes of ADTS frame\n");
+    KLOG("    (in frame starting at " OFFSET_T_FORMAT ")\n",posn);
     free(data);
     return 1;
   }
 
 #if DEBUG
-  print_msg("ADTS frame\n");
-  print_data(TRUE,"Start",header,JUST_ENOUGH,JUST_ENOUGH);
+  printf("ADTS frame\n");
+  print_data(stdout,"Start",header,JUST_ENOUGH,JUST_ENOUGH);
 #endif
 
   if (header[0] != 0xFF || (header[1] & 0xF0) != 0xF0)
   {
-    fprint_err("### ADTS frame does not start with '1111 1111 1111'"
-               " syncword - lost synchronisation?\n"
-               "    Found 0x%X%X%X instead of 0xFFF\n",
-               (unsigned)(header[0] & 0xF0) >> 4,
-               (header[0] & 0x0F),
-               (unsigned)(header[1] & 0xF0) >> 4);
-    fprint_err("    (in frame starting at " OFFSET_T_FORMAT ")\n",posn);
+    KLOG("### ADTS frame does not start with '1111 1111 1111'"
+            " syncword - lost synchronisation?\n"
+            "    Found 0x%X%X%X instead of 0xFFF\n",
+            (unsigned)(header[0] & 0xF0) >> 4,
+            (header[0] & 0x0F),
+            (unsigned)(header[1] & 0xF0) >> 4);
+    KLOG("    (in frame starting at " OFFSET_T_FORMAT ")\n",posn);
     return 1;
   }
 
   id = (header[1] & 0x08) >> 3;
 #if DEBUG
-  fprint_msg("   ID %d (%s)\n",id,(id==1?"MPEG-2 AAC":"MPEG-4"));
+  printf("   ID %d (%s)\n",id,(id==1?"MPEG-2 AAC":"MPEG-4"));
 #endif
   layer = (header[1] & 0x06) >> 1;
   if (layer != 0)
-    fprint_msg("   layer is %d, not 0 (in frame at " OFFSET_T_FORMAT ")\n",
-               layer,posn);
+    printf("   layer is %d, not 0 (in frame at " OFFSET_T_FORMAT ")\n",
+           layer,posn);
 
   // Experience appears to show that emphasis doesn't exist in MPEG-2 AVC.
   // But it does exist in (ID=1) MPEG-4 streams.
@@ -125,13 +124,13 @@ extern int read_next_adts_frame(int            file,
     frame_length = (header[4] << 5) | ((unsigned)(header[5] & 0xF8) >> 3);
   }
 #if DEBUG
-  fprint_msg("   length %d\n",frame_length);
+  printf("   length %d\n",frame_length);
 #endif
 
   data = malloc(frame_length);
   if (data == NULL)
   {
-    print_err("### Unable to extend data buffer for ADTS frame\n");
+    KLOG("### Unable to extend data buffer for ADTS frame\n");
     free(data);
     return 1;
   }
@@ -143,14 +142,14 @@ extern int read_next_adts_frame(int            file,
   if (err)
   {
     if (err == EOF)
-      print_err("### Unexpected EOF reading rest of ADTS frame\n");
+      KLOG("### Unexpected EOF reading rest of ADTS frame\n");
     else
-      print_err("### Error reading rest of ADTS frame\n");
+      KLOG("### Error reading rest of ADTS frame\n");
     free(data);
     return 1;
   }
 #if DEBUG
-  print_data(TRUE,"Again",data,frame_length,20);
+  print_data(stdout,"Again",data,frame_length,20);
 #endif
 
   err = build_audio_frame(frame);

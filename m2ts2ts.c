@@ -42,7 +42,6 @@
 #include "compat.h"
 #include "ts_defns.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "version.h"
 
 #define M2TS_PACKET_SIZE (4 + TS_PACKET_SIZE)
@@ -112,10 +111,10 @@ static int extract_packets(int input, FILE * output,
     {
       packet_buffer = malloc(sizeof(struct _m2ts_packet_buffer));
       /***DEBUG***/
-      fprint_msg("Allocated buffer @ %p\n", packet_buffer);
+      printf("Allocated buffer @ 0x%08x\n", (unsigned int)packet_buffer);
       if (packet_buffer == NULL)
       {
-	print_err( "### m2ts2ts: out of memory allocating M2TS packet buffer\n");
+	KLOG( "### m2ts2ts: out of memory allocating M2TS packet buffer\n");
 	while (reorder_buffer_head != NULL)
 	{
 	  packet_buffer = reorder_buffer_head->next;
@@ -132,7 +131,7 @@ static int extract_packets(int input, FILE * output,
     {
       // End of file, no more to do, thank you and goodnight
       if (!quiet)
-	print_msg("m2ts2ts: Reached end of file\n");
+	printf("m2ts2ts: Reached end of file\n");
       break;
     }
     else if (err)
@@ -150,29 +149,29 @@ static int extract_packets(int input, FILE * output,
     }
     parse_m2ts_packet(packet_buffer);
     if (verbose)
-      fprint_msg("Read timestamp 0x%08x\n", packet_buffer->timestamp);
+      printf("Read timestamp 0x%08x\n", packet_buffer->timestamp);
 
     // Insert the packet in the reorder buffer, in time order
     // It's most likely that we'll get an up to date packet,
     // so start at the tail and work to the front
     p = reorder_buffer_tail;
     if (p != NULL)
-      fprint_msg("tail timestamp = 0x%08x @ %p\n",
-                 p->timestamp, p);
+      printf("tail timestamp = 0x%08x @ 0x%08x\n",
+	     p->timestamp, (unsigned int)p);
     while (p != NULL && p->timestamp > packet_buffer->timestamp)
     {
       p = p->prev;
       if (p != NULL)
-	fprint_msg("p timestamp = 0x%08x @ %p\n",
-                   p->timestamp, p);
+	printf("p timestamp = 0x%08x @ 0x%08x\n",
+	       p->timestamp, (unsigned int)p);
     }
 
     if (p == NULL)
     {
       // Insert as the head of queue
-      fprint_msg("### Insert %p at head: %p\n",
-                 packet_buffer,
-                 reorder_buffer_head);
+      printf ("### Insert 0x%08x at head: 0x%08x\n",
+	      (unsigned int)packet_buffer,
+	      (unsigned int)reorder_buffer_head);
       packet_buffer->next = reorder_buffer_head;
       reorder_buffer_head = packet_buffer;
       packet_buffer->prev = NULL;
@@ -200,23 +199,23 @@ static int extract_packets(int input, FILE * output,
       else
       {
 	if (verbose)
-	  fprint_msg("Reordered packet timestamp=0x%08x\n",
-                     packet_buffer->timestamp);
+	  printf("Reordered packet timestamp=0x%08x\n",
+		 packet_buffer->timestamp);
 	packet_buffer->next->prev = packet_buffer;
       }
     }
-    fprint_msg("### packet at %p, prev=%p, next=%p\n",
-               packet_buffer,
-               (packet_buffer->prev),
-               (packet_buffer->next));
+    printf("### packet at 0x%08x, prev=0x%08x, next=0x%08x\n",
+	   (unsigned int)packet_buffer,
+	   (unsigned int)(packet_buffer->prev),
+	   (unsigned int)(packet_buffer->next));
     reorder_buffer_entries++;
 
     if (reorder_buffer_entries > (int)reorder_buffer_size)
     {
       // Write out the head of the reorder buffer
-      fprint_msg("### queue head @ %p, next=%p\n",
-                 reorder_buffer_head,
-                 (reorder_buffer_head->next));
+      printf("### queue head @ 0x%08x, next=0x%08x\n",
+	     (unsigned int)reorder_buffer_head,
+	     (unsigned int)(reorder_buffer_head->next));
       packet_buffer = reorder_buffer_head;
       reorder_buffer_head = reorder_buffer_head->next;
       reorder_buffer_head->prev = NULL;
@@ -225,8 +224,8 @@ static int extract_packets(int input, FILE * output,
       if (written != 1)
       {
 	// Major output catastrophe!
-	fprint_err( "### m2ts2ts: Error writing TS packet: %s\n",
-                    strerror(errno));
+	KLOG( "### m2ts2ts: Error writing TS packet: %s\n",
+		strerror(errno));
 	free(packet_buffer);
 	while (reorder_buffer_head != NULL)
 	{
@@ -240,7 +239,7 @@ static int extract_packets(int input, FILE * output,
 
       reorder_buffer_entries--;
       if (verbose)
-	fprint_msg("Written timestamp 0x%08x\n", packet_buffer->timestamp);
+	printf("Written timestamp 0x%08x\n", packet_buffer->timestamp);
       packet_buffer_in_hand = packet_buffer;
     }
   }
@@ -256,8 +255,8 @@ static int extract_packets(int input, FILE * output,
     if (written != 1)
     {
       // So close...
-      fprint_err( "### m2ts2ts: Error writing final TS packets: %s\n",
-                  strerror(errno));
+      KLOG( "### m2ts2ts: Error writing final TS packets: %s\n",
+	      strerror(errno));
       while (reorder_buffer_head != NULL)
       {
 	packet_buffer = reorder_buffer_head->next;
@@ -276,21 +275,18 @@ static int extract_packets(int input, FILE * output,
 
 static void print_usage(void)
 {
-  print_msg("Usage: m2ts2es [switches] [<infile>] [<outfile>]\n"
+  printf("Usage: m2ts2es [switches] [<infile>] [<outfile>]\n"
 	 "\n");
   REPORT_VERSION("m2ts2ts");
-  print_msg("\n"
+  printf("\n"
 	 "Files:\n"
 	 "  <infile>  is a BDAV MPEG-2 Transport Stream file (M2TS)\n"
 	 "            (but see -stdin)\n"
 	 "  <outfile> is an H.222 Transport Stream file (but see -stdout)\n"
 	 "\n"
 	 "General Switches:\n"
-         "  -err stdout          Write error messages to standard output (the default)\n"
-         "  -err stderr          Write error messages to standard error (Unix traditional)\n"
 	 "  -stdin               Input from standard input instead of a file\n"
 	 "  -stdout              Output to standard output instead of a file\n"
-         "                       Forces -quiet and -err stderr.\n"
 	 "  -verbose, -v         Output informational/diagnostic messages\n"
 	 "  -quiet, -q           Only output error messages\n"
 	 "  -buffer <n>, -b <n>  Number of TS packets to buffer for reordering\n"
@@ -346,8 +342,7 @@ int main(int argc, char *argv[])
       }
       else if (!strcmp("-buffer", argv[ii]) || !strcmp("-b", argv[ii]))
       {
-        CHECKARG("m2ts2ts",ii);
-	err = unsigned_value("m2ts2ts", argv[ii], argv[ii+1],
+	err = unsigned_value("ts2es", argv[ii], argv[ii+1],
 			     0, &reorder_buff_size);
 	if (err) return 1;
 	ii++;
@@ -361,28 +356,11 @@ int main(int argc, char *argv[])
       {
 	use_stdout = TRUE;
 	had_output_name = TRUE; // ish
-        redirect_output_stderr();
-      }
-      else if (!strcmp("-err",argv[ii]))
-      {
-        CHECKARG("m2ts2ts",ii);
-        if (!strcmp(argv[ii+1],"stderr"))
-          redirect_output_stderr();
-        else if (!strcmp(argv[ii+1],"stdout"))
-          redirect_output_stdout();
-        else
-        {
-          fprint_err("### m2ts2ts: "
-                     "Unrecognised option '%s' to -err (not 'stdout' or"
-                     " 'stderr')\n",argv[ii+1]);
-          return 1;
-        }
-        ii++;
       }
       else
       {
-	fprint_err( "### m2ts2ts: "
-                    "Unrecognised command line switch '%s'\n", argv[ii]);
+	KLOG( "### m2ts2ts: "
+		"Unrecognised command line switch '%s'\n", argv[ii]);
 	return 1;
       }
     }
@@ -390,7 +368,7 @@ int main(int argc, char *argv[])
     {
       if (had_input_name && had_output_name)
       {
-	fprint_err( "### m2ts2ts: Unexpected '%s'\n", argv[ii]);
+	KLOG( "### m2ts2ts: Unexpected '%s'\n", argv[ii]);
 	return 1;
       }
       else if (had_input_name) // and not had_output_name, inc "-stdout"
@@ -409,13 +387,13 @@ int main(int argc, char *argv[])
 
   if (!had_input_name)
   {
-    print_err( "### m2ts2ts: No input file specified\n");
+    KLOG( "### m2ts2ts: No input file specified\n");
     return 1;
   }
 
   if (!had_output_name)
   {
-    print_err( "### m2ts2ts: No output file specified\n");
+    KLOG( "### m2ts2ts: No output file specified\n");
     return 1;
   }
 
@@ -435,13 +413,13 @@ int main(int argc, char *argv[])
     input = open_binary_file(input_name, FALSE);
     if (input == -1)
     {
-      fprint_err( "### m2ts2ts: Unable to open input file %s\n",
-                  input_name);
+      KLOG( "### m2ts2ts: Unable to open input file %s\n",
+	      input_name);
       return 1;
     }
   }
   if (!quiet)
-    fprint_msg("Reading from %s\n", (use_stdin ? "<stdin>" : input_name));
+    printf("Reading from %s\n", (use_stdin ? "<stdin>" : input_name));
 
   if (use_stdout)
   {
@@ -454,19 +432,19 @@ int main(int argc, char *argv[])
     {
       if (!use_stdin)
 	(void) close_file(input);
-      fprint_err( "### m2ts2ts: Unable to open output file %s: %s\n",
-                  output_name, strerror(errno));
+      KLOG( "### m2ts2ts: Unable to open output file %s: %s\n",
+	      output_name, strerror(errno));
       return 1;
     }
   }
   if (!quiet)
-    fprint_msg("Writing to   %s\n", (use_stdout ? "<stdout>" : output_name));
+    printf("Writing to   %s\n", (use_stdout ? "<stdout>" : output_name));
 
 
   err = extract_packets(input, output, reorder_buff_size, verbose, quiet);
   if (err)
   {
-    print_err( "### m2ts2ts: Error extracting data\n");
+    KLOG( "### m2ts2ts: Error extracting data\n");
     if (!use_stdin)  (void) close_file(input);
     if (!use_stdout) (void) fclose(output);
     return 1;
@@ -479,8 +457,8 @@ int main(int argc, char *argv[])
     err = fclose(output);
     if (err)
     {
-      fprint_err( "### m2ts2ts: Error closing output file %s: %s\n",
-                  output_name, strerror(errno));
+      KLOG( "### m2ts2ts: Error closing output file %s: %s\n",
+	      output_name, strerror(errno));
       (void) close_file(input);
       return 1;
     }
@@ -490,8 +468,8 @@ int main(int argc, char *argv[])
   {
     err = close_file(input);
     if (err)
-      fprint_err( "### m2ts2ts: Error closing input file %s\n",
-                  input_name);
+      KLOG( "### m2ts2ts: Error closing input file %s\n",
+	      input_name);
   }
   return 0;
 }

@@ -32,7 +32,6 @@
 #include <string.h>
 
 #include "compat.h"
-#include "printing_fns.h"
 #include "h262_fns.h"
 #include "es_fns.h"
 #include "ts_fns.h"
@@ -44,7 +43,7 @@
 
 
 /*
- * Print out information derived from the start code
+ * Print out information derived from the start code, to the given stream.
  *
  * Note that if a "SYSTEM START" code is reported, then the data is
  * likely to be PES or Transport Stream data, not Elementary Stream.
@@ -56,7 +55,8 @@
  * that some of the apparent start code prefixes are actually false
  * detections.
  */
-extern void print_h262_start_code_str(byte   start_code)
+extern void print_h262_start_code_str(FILE  *stream,
+                                      byte   start_code)
 {
   byte  number;
   char *str = NULL;
@@ -97,25 +97,25 @@ extern void print_h262_start_code_str(byte   start_code)
   }
 
   if (str != NULL)
-    print_msg(str);
+    fprintf(stream,str);
   else if (start_code == 0x47)
-    print_msg("TRANSPORT STREAM sync byte");
+    fprintf(stream,"TRANSPORT STREAM sync byte");
   else if (start_code >= 0x01 && start_code <= 0xAF)
-    fprint_msg("Slice, vertical posn %d",start_code);
+    fprintf(stream,"Slice, vertical posn %d",start_code);
   else if (start_code >= 0xC0 && start_code <=0xDF)
   {
     number = start_code & 0x1F;
-    fprint_msg("SYSTEM START: Audio stream %02x",number);
+    fprintf(stream,"SYSTEM START: Audio stream %02x",number);
   }
   else if (start_code >= 0xE0 && start_code <= 0xEF)
   {
     number = start_code & 0x0F;
-    fprint_msg("SYSTEM START: Video stream %x",number);
+    fprintf(stream,"SYSTEM START: Video stream %x",number);
   }
   else if (start_code >= 0xFC && start_code <= 0xFE)
-    print_msg("SYSTEM START: Reserved data stream");
+    fprintf(stream,"SYSTEM START: Reserved data stream");
   else
-    print_msg("SYSTEM START: Unrecognised stream id");
+    fprintf(stream,"SYSTEM START: Unrecognised stream id");
 }
 
 /*
@@ -129,13 +129,13 @@ extern int build_h262_item(h262_item_p  *item)
   h262_item_p  new = malloc(SIZEOF_H262_ITEM);
   if (new == NULL)
   {
-    print_err("### Unable to allocate MPEG2 item datastructure\n");
+    KLOG("### Unable to allocate MPEG2 item datastructure\n");
     return 1;
   }
   err = setup_ES_unit(&(new->unit));
   if (err)
   {
-    print_err("### Unable to allocate MPEG2 item data buffer\n");
+    KLOG("### Unable to allocate MPEG2 item data buffer\n");
     free(new);
     return 1;
   }
@@ -160,20 +160,21 @@ extern void free_h262_item(h262_item_p  *item)
 }
 
 /*
- * Print out useful information about this MPEG2 item
+ * Print out useful information about this MPEG2 item, on the given stream.
  */
-extern void report_h262_item(h262_item_p  item)
+extern void report_h262_item(FILE   *stream,
+                             h262_item_p  item)
 {
-  fprint_msg(OFFSET_T_FORMAT_08 "/%04d: MPEG2 item %02x (",
-             item->unit.start_posn.infile,
-             item->unit.start_posn.inpacket,item->unit.start_code);
-  print_h262_start_code_str(item->unit.start_code);
-  print_msg(")");
+  fprintf(stream,OFFSET_T_FORMAT_08 "/%04d: MPEG2 item %02x (",
+          item->unit.start_posn.infile,
+          item->unit.start_posn.inpacket,item->unit.start_code);
+  print_h262_start_code_str(stream,item->unit.start_code);
+  fprintf(stream,")");
   if (item->unit.start_code == 0)
-    fprint_msg(" %d (%s)",item->picture_coding_type,
-               H262_PICTURE_CODING_STR(item->picture_coding_type));
-  fprint_msg(" size %d",item->unit.data_len);
-  print_msg("\n");
+    fprintf(stream," %d (%s)",item->picture_coding_type,
+            H262_PICTURE_CODING_STR(item->picture_coding_type));
+  fprintf(stream," size %d",item->unit.data_len);
+  fprintf(stream,"\n");
 }
 
 // ------------------------------------------------------------
@@ -231,7 +232,7 @@ extern int build_h262_context(ES_p            es,
   h262_context_p  new = malloc(SIZEOF_H262_CONTEXT);
   if (new == NULL)
   {
-    print_err("### Unable to allocate H.262 context datastructure\n");
+    KLOG("### Unable to allocate H.262 context datastructure\n");
     return 1;
   }
 
@@ -354,14 +355,14 @@ static int build_h262_picture(h262_context_p   context,
   h262_picture_p  new  = malloc(SIZEOF_H262_PICTURE);
   if (new == NULL)
   {
-    print_err("### Unable to allocate H.262 picture datastructure\n");
+    KLOG("### Unable to allocate H.262 picture datastructure\n");
     return 1;
   }
 
   err = build_ES_unit_list(&(new->list));
   if (err)
   {
-    print_err("### Unable to allocate internal list for H.262 picture\n");
+    KLOG("### Unable to allocate internal list for H.262 picture\n");
     free(new);
     return 1;
   }
@@ -400,8 +401,9 @@ static int build_h262_picture(h262_context_p   context,
   }
   else
   {
-    fprint_err("!!! Building H.262 picture that starts with a %s (%02x)\n",
-               H262_START_CODE_STR(item->unit.start_code),item->unit.start_code);
+    KLOG(
+            "!!! Building H.262 picture that starts with a %s (%02x)\n",
+            H262_START_CODE_STR(item->unit.start_code),item->unit.start_code);
     new->is_picture = FALSE;
     new->is_sequence_header = FALSE;
     new->picture_coding_type = 0; // Forbidden value, just in case
@@ -410,8 +412,8 @@ static int build_h262_picture(h262_context_p   context,
   err = append_to_h262_picture(new,item);
   if (err)
   {
-    fprint_err("### Error appending first item to H.262 %s\n",
-               H262_START_CODE_STR(item->unit.start_code));
+    KLOG("### Error appending first item to H.262 %s\n",
+            H262_START_CODE_STR(item->unit.start_code));
     free_h262_picture(&new);
     return 1;
   }
@@ -437,7 +439,7 @@ static int append_fake_afd(h262_picture_p  picture,
     err = build_h262_item(&item);
     if (err)
     {
-      print_err("### Error building 'fake' AFD for H.262 picture\n");
+      KLOG("### Error building 'fake' AFD for H.262 picture\n");
       return 1;
     }
     item->unit.data[0] = 0x00;
@@ -460,7 +462,7 @@ static int append_fake_afd(h262_picture_p  picture,
   err = append_to_h262_picture(picture,item);
   if (err)
   {
-    print_err("### Error appending 'fake' AFD to H.262 picture\n");
+    KLOG("### Error appending 'fake' AFD to H.262 picture\n");
     return 1;
   }
 
@@ -488,7 +490,7 @@ static int merge_fields(h262_picture_p  picture1,
                                      &picture2->list->array[ii]);
     if (err)
     {
-      print_err("### Error merging two H.262 field pictures\n");
+      KLOG("### Error merging two H.262 field pictures\n");
       return 1;
     }
   }
@@ -560,7 +562,8 @@ static int maybe_remember_this_picture(h262_context_p  h262,
       err = get_ES_unit_list_bounds(this_picture->list,&start_posn,&num_bytes);
       if (err)
       {
-        print_err("### Error working out position/size of H.262 picture\n");
+        KLOG(
+                "### Error working out position/size of H.262 picture\n");
         return 1;
       }
       
@@ -570,13 +573,14 @@ static int maybe_remember_this_picture(h262_context_p  h262,
                                        this_picture->afd);
       if (err)
       {
-        print_err("### Error remembering reversing data for H.262 item\n");
+        KLOG(
+                "### Error remembering reversing data for H.262 item\n");
         return 1;
       }
       if (verbose)
-        fprint_msg("REMEMBER I picture %5d at " OFFSET_T_FORMAT_08
-                   "/%04d for %5d\n",h262->picture_index,
-                   start_posn.infile,start_posn.inpacket,num_bytes);
+        printf("REMEMBER I picture %5d at " OFFSET_T_FORMAT_08
+               "/%04d for %5d\n",h262->picture_index,
+               start_posn.infile,start_posn.inpacket,num_bytes);
     }
   }
   else if (this_picture->is_sequence_header)
@@ -586,21 +590,21 @@ static int maybe_remember_this_picture(h262_context_p  h262,
     err = get_ES_unit_list_bounds(this_picture->list,&start_posn,&num_bytes);
     if (err)
     {
-      print_err("### Error working out position/size of H.262"
-                " sequence header for reversing data\n");
+      KLOG("### Error working out position/size of H.262"
+              " sequence header for reversing data\n");
       return 1;
     }
     err = remember_reverse_h262_data(h262->reverse_data,0,
                                      start_posn,num_bytes,0,0);
     if (err)
     {
-      print_err("### Error remembering reversing data for H.262 item\n");
+      KLOG("### Error remembering reversing data for H.262 item\n");
       return 1;
     }
     if (verbose)
-      fprint_msg("REMEMBER Sequence header at " OFFSET_T_FORMAT_08
-                 "/%04d for %5d\n",
-                 start_posn.infile,start_posn.inpacket,num_bytes);
+      printf("REMEMBER Sequence header at " OFFSET_T_FORMAT_08
+             "/%04d for %5d\n",
+             start_posn.infile,start_posn.inpacket,num_bytes);
   }
   return 0;
 }
@@ -624,16 +628,16 @@ static int extract_AFD(h262_item_p  item,
     // AFD flag set
     if (item->unit.data_len < 10)
     {
-      fprint_err("!!! AFD too short (only %d bytes - AFD missing)\n",
-                 item->unit.data_len);
+      KLOG("!!! AFD too short (only %d bytes - AFD missing)\n",
+              item->unit.data_len);
       *afd = UNSET_AFD_BYTE;
       return 1;
     }
     *afd = item->unit.data[9];
     if ((item->unit.data[9] & 0xF0) != 0xF0)
     {
-      fprint_err("### Bad AFD %02x (reserved bits not 1111)\n",
-                 item->unit.data[9]);
+      KLOG("### Bad AFD %02x (reserved bits not 1111)\n",
+              item->unit.data[9]);
       return 1;
     }
   }
@@ -643,8 +647,8 @@ static int extract_AFD(h262_item_p  item,
   }
   else
   {
-    fprint_err("### AFD datastructure malformed: flag byte is %02x"
-               " instead of 0x41 or 0x01\n",item->unit.data[8]);
+    KLOG("### AFD datastructure malformed: flag byte is %02x"
+            " instead of 0x41 or 0x01\n",item->unit.data[8]);
     if (item->unit.data_len == 9)
       *afd = UNSET_AFD_BYTE;
     else
@@ -660,21 +664,21 @@ static int extract_AFD(h262_item_p  item,
  */
 static void _show_item(h262_item_p  item)
 {
-  print_msg("__ ");
+  printf("__ ");
   if (item == NULL)
   {
-    print_msg("<no item>\n");
+    printf("<no item>\n");
     return;
   }
   if (is_h262_picture_item(item))
-    fprint_msg("%s picture",H262_PICTURE_CODING_STR(item->picture_coding_type));
+    printf("%s picture",H262_PICTURE_CODING_STR(item->picture_coding_type));
   else if (is_h262_slice_item(item))
-    fprint_msg("slice %2x",item->unit.start_code);
+    printf("slice %2x",item->unit.start_code);
   else
-    fprint_msg("%s",H262_START_CODE_STR(item->unit.start_code));
-  fprint_msg(" at " OFFSET_T_FORMAT "/%d for %d\n",
-             item->unit.start_posn.infile,item->unit.start_posn.inpacket,
-             item->unit.data_len);
+    printf("%s",H262_START_CODE_STR(item->unit.start_code));
+  printf(" at " OFFSET_T_FORMAT "/%d for %d\n",
+         item->unit.start_posn.infile,item->unit.start_posn.inpacket,
+         item->unit.data_len);
 }
 #endif
 
@@ -714,7 +718,7 @@ extern int get_next_h262_single_picture(h262_context_p  context,
   int  num_slices = 0;
   int  had_slice = FALSE;
   int  last_slice_start_code = 0;
-  if (verbose && context->last_item) print_msg("__ reuse last item\n");
+  if (verbose && context->last_item) printf("__ reuse last item\n");
 #endif
 
   context->last_item = NULL;
@@ -752,7 +756,7 @@ extern int get_next_h262_single_picture(h262_context_p  context,
 #if DEBUG_GET_NEXT_PICTURE
   if (verbose)
   {
-    print_msg("__ --------------------------------- <start picture>\n");
+    printf("__ --------------------------------- <start picture>\n");
     _show_item(item);
   }
 #endif
@@ -767,7 +771,7 @@ extern int get_next_h262_single_picture(h262_context_p  context,
     // A sequence end is a single item, so we're done
 #if DEBUG_GET_NEXT_PICTURE
     if (verbose)
-      print_msg("__ --------------------------------- <end picture>\n");
+      printf("__ --------------------------------- <end picture>\n");
 #endif
     return 0;
   }
@@ -810,14 +814,14 @@ extern int get_next_h262_single_picture(h262_context_p  context,
         // We found a *real* AFD - remember it
         err = extract_AFD(item,&(*picture)->afd);
         if (err)
-          fprint_err("!!! Assuming AFD %x at " OFFSET_T_FORMAT "/%d\n",
-                     (*picture)->afd,
-                     item->unit.start_posn.infile,item->unit.start_posn.inpacket);
+          KLOG("!!! Assuming AFD %x at " OFFSET_T_FORMAT "/%d\n",
+                  (*picture)->afd,
+                  item->unit.start_posn.infile,item->unit.start_posn.inpacket);
         (*picture)->is_real_afd = TRUE;
 #if DEBUG_AFD
         if ((*picture)->afd != context->last_afd)
         {
-          print_msg("* ");
+          printf("* ");
           report_h262_picture(stdout,*picture,FALSE);
         }
 #endif
@@ -839,10 +843,10 @@ extern int get_next_h262_single_picture(h262_context_p  context,
 #if DEBUG_GET_NEXT_PICTURE
         if (verbose)
         {
-          print_msg("__ fake AFD ");
-          print_bits(4,(*picture)->afd);
-          fprint_msg(", i.e., %s",SHORT_AFD_STR((*picture)->afd));
-          print_msg("\n");
+          printf("__ fake AFD ");
+          print_bits(stdout,4,(*picture)->afd);
+          printf(", i.e., %s",SHORT_AFD_STR((*picture)->afd));
+          printf("\n");
         }
 #endif
       }
@@ -867,7 +871,7 @@ extern int get_next_h262_single_picture(h262_context_p  context,
     err = append_to_h262_picture(*picture,item);
     if (err)
     {
-      print_err("### Error adding item to H.262 sequence header\n");
+      KLOG("### Error adding item to H.262 sequence header\n");
       free_h262_picture(picture);
       return 1;
     }
@@ -888,15 +892,15 @@ extern int get_next_h262_single_picture(h262_context_p  context,
       if (num_slices > 1)
       {
         ES_unit_p  unit = &(*picture)->list->array[(*picture)->list->length-1];
-        print_msg("__ ...\n");
-        fprint_msg("__ slice %2x",last_slice_start_code);
-        fprint_msg(" at " OFFSET_T_FORMAT "/%d for %d\n",
-                   unit->start_posn.infile,unit->start_posn.inpacket,
-                   unit->data_len);
+        printf("__ ...\n");
+        printf("__ slice %2x",last_slice_start_code);
+        printf(" at " OFFSET_T_FORMAT "/%d for %d\n",
+               unit->start_posn.infile,unit->start_posn.inpacket,
+               unit->data_len);
       }
-      fprint_msg("__ (%2d slices)\n",num_slices);
+      printf("__ (%2d slices)\n",num_slices);
     }
-    print_msg("__ --------------------------------- <end picture>\n");
+    printf("__ --------------------------------- <end picture>\n");
     if (in_picture || in_sequence_header)
       _show_item(item);
   }
@@ -932,15 +936,15 @@ static int get_next_field_of_pair(h262_context_p  context,
   h262_picture_p  second;
 
   if (verbose)
-    fprint_msg("@@ Looking for second field (%s time)\n",
-               (first_time?"first":"second"));
+    printf("@@ Looking for second field (%s time)\n",
+           (first_time?"first":"second"));
   
   // We assume (hope) the next picture will be our second half
   err = get_next_h262_single_picture(context,verbose,&second);
   if (err)
   {
     if (err != EOF)
-      print_err("### Trying to read second field\n");
+      KLOG("### Trying to read second field\n");
     return err;
   }
 
@@ -948,8 +952,8 @@ static int get_next_field_of_pair(h262_context_p  context,
   {
     // But it was either a frame or a sequence header - oh dear
     if (!quiet)
-      fprint_err("!!! Field followed by a %s - ignoring the field\n",
-                 (second->is_picture?"frame":"sequence header"));
+      KLOG("!!! Field followed by a %s - ignoring the field\n",
+              (second->is_picture?"frame":"sequence header"));
     free_h262_picture(picture);
     *picture = second;
     // and pretend to success
@@ -957,7 +961,7 @@ static int get_next_field_of_pair(h262_context_p  context,
   else if ((*picture)->temporal_reference == second->temporal_reference)
   {
     // They appear to be matching fields - make a frame from them
-    if (verbose) print_msg("@@ Merging two fields\n");
+    if (verbose) printf("@@ Merging two fields\n");
     err = merge_fields(*picture,second);
     if (err)
     {
@@ -969,10 +973,10 @@ static int get_next_field_of_pair(h262_context_p  context,
   else if (first_time)
   {
     if (!quiet)
-      fprint_err("!!! Field with temporal ref %d (%x) followed by"
-                 " field with temporal ref %d (%x) - ignoring first field\n",
-                 (*picture)->temporal_reference,(*picture)->temporal_reference,
-                 second->temporal_reference,second->temporal_reference);
+      KLOG("!!! Field with temporal ref %d (%x) followed by"
+              " field with temporal ref %d (%x) - ignoring first field\n",
+              (*picture)->temporal_reference,(*picture)->temporal_reference,
+              second->temporal_reference,second->temporal_reference);
 
     // Try again
     free_h262_picture(picture);
@@ -982,8 +986,8 @@ static int get_next_field_of_pair(h262_context_p  context,
   }
   else
   {
-    print_err("### Adjacent fields do not share temporal references"
-              " - unable to match fields up\n");
+    KLOG("### Adjacent fields do not share temporal references"
+            " - unable to match fields up\n");
     return 1;
   }
   return 0;
@@ -1096,7 +1100,7 @@ extern int write_h262_picture_as_TS(TS_writer_p     tswriter,
                                     DEFAULT_VIDEO_STREAM_ID);
     if (err)
     {
-      print_err("### Error writing out picture list to TS\n");
+      KLOG("### Error writing out picture list to TS\n");
       return err;
     }
   }
@@ -1129,7 +1133,7 @@ extern int write_h262_picture_as_ES(FILE           *output,
     err = write_ES_unit(output,unit);
     if (err)
     {
-      print_err("### Error writing out picture list to ES\n");
+      KLOG("### Error writing out picture list to ES\n");
       return err;
     }
   }
@@ -1143,52 +1147,53 @@ extern int write_h262_picture_as_ES(FILE           *output,
  * - `picture` is the picture to report on
  * - if `report_data`, then the component ES units will be printed out as well
  */
-extern void report_h262_picture(h262_picture_p  picture,
+extern void report_h262_picture(FILE           *stream,
+                                h262_picture_p  picture,
                                 int             report_data)
 {
   if (picture->is_picture)
   {
-    fprint_msg("%s %s #%02d",
-               H262_PICTURE_CODING_STR(picture->picture_coding_type),
-               H262_PICTURE_STRUCTURE_STR(picture->picture_structure),
-               picture->temporal_reference);
+    printf("%s %s #%02d",
+           H262_PICTURE_CODING_STR(picture->picture_coding_type),
+           H262_PICTURE_STRUCTURE_STR(picture->picture_structure),
+           picture->temporal_reference);
 
     if (picture->was_two_fields)
-      print_msg(" (merged)");
+      printf(" (merged)");
 
-    fprint_msg(" %s",H262_ASPECT_RATIO_INFO_STR(picture->aspect_ratio_info));
-
+    printf(" %s",H262_ASPECT_RATIO_INFO_STR(picture->aspect_ratio_info));
+    
     if (picture->is_real_afd)
-      print_msg(" AFD ");
+      printf(" AFD ");
     else
-      print_msg(" afd ");
-    print_bits(4,picture->afd);
-    fprint_msg(", i.e., %s",SHORT_AFD_STR(picture->afd));
-    print_msg("\n");
+      printf(" afd ");
+    print_bits(stdout,4,picture->afd);
+    printf(", i.e., %s",SHORT_AFD_STR(picture->afd));
+    printf("\n");
   }
   else if (picture->is_sequence_header)
   {
-    print_msg("Sequence header: ");
+    printf("Sequence header: ");
 
     switch (picture->progressive_sequence)
     {
-    case 0: print_msg("frames and fields"); break;
-    case 1: print_msg("progressive frames only"); break;
+    case 0: printf("frames and fields"); break;
+    case 1: printf("progressive frames only"); break;
     default:
-      fprint_msg("progressive_sequence=%d",
-                 picture->progressive_sequence);
+      printf("progressive_sequence=%d",
+             picture->progressive_sequence);
       break;
     }
-    fprint_msg(", aspect ratio %s",
-               H262_ASPECT_RATIO_INFO_STR(picture->aspect_ratio_info));
-    print_msg("\n");
+    printf(", aspect ratio %s",
+           H262_ASPECT_RATIO_INFO_STR(picture->aspect_ratio_info));
+    printf("\n");
   }
   else
   {
-    print_msg("Sequence end\n");
+    printf("Sequence end\n");
   }
   if (report_data)
-    report_ES_unit_list("ES units",picture->list);
+    report_ES_unit_list(stream,"ES units",picture->list);
 }
 
 // Local Variables:

@@ -30,7 +30,6 @@
 #include <stdlib.h>
 
 #include "compat.h"
-#include "printing_fns.h"
 #include "es_fns.h"
 #include "ts_fns.h"
 #include "nalunit_fns.h"
@@ -53,7 +52,7 @@ static inline int build_access_unit(access_unit_p  *acc_unit,
   access_unit_p  new = malloc(SIZEOF_ACCESS_UNIT);
   if (new == NULL)
   {
-    print_err("### Unable to allocate access unit datastructure\n");
+    KLOG("### Unable to allocate access unit datastructure\n");
     return 1;
   }
 
@@ -105,36 +104,37 @@ extern void free_access_unit(access_unit_p  *acc_unit)
 }
 
 /*
- * Report on this access unit
+ * Report on this access unit, on the given output stream.
  */
-extern void report_access_unit(access_unit_p  access_unit)
+extern void report_access_unit(FILE          *stream,
+                               access_unit_p  access_unit)
 {
   int ii;
-  fprint_msg("Access unit %u",access_unit->index);
+  fprintf(stream,"Access unit %u",access_unit->index);
   if (access_unit->started_primary_picture)
-    fprint_msg(" (%s)",access_unit->primary_start->start_reason);
-  print_msg(":\n");
+    fprintf(stream," (%s)",access_unit->primary_start->start_reason);
+  fprintf(stream,":\n");
   if (access_unit->field_pic_flag)
-    fprint_msg("  %s field of frame %u\n",
-               (access_unit->bottom_field_flag==1?"Bottom":"Top"),
-               access_unit->frame_num);
+    fprintf(stream,"  %s field of frame %u\n",
+            (access_unit->bottom_field_flag==1?"Bottom":"Top"),
+            access_unit->frame_num);
   else
-    fprint_msg("  Frame %u\n",access_unit->frame_num);
+    fprintf(stream,"  Frame %u\n",access_unit->frame_num);
 
   if (access_unit->ignored_broken_NAL_units)
-    fprint_msg("  Ignored %d broken NAL unit%s\n",
-               access_unit->ignored_broken_NAL_units,
-               (access_unit->ignored_broken_NAL_units==1?"":"s"));
+    fprintf(stream,"  Ignored %d broken NAL unit%s\n",
+            access_unit->ignored_broken_NAL_units,
+            (access_unit->ignored_broken_NAL_units==1?"":"s"));
   
   for (ii=0; ii<access_unit->nal_units->length; ii++)
   {
     nal_unit_p nal = access_unit->nal_units->array[ii];
     if (nal == NULL)
-      print_msg("     <null>\n");
+      fprintf(stream,"     <null>\n");
     else
     {
-      fprint_msg("    %c",((access_unit->primary_start == nal)?'*':' '));
-      report_nal(TRUE,nal);
+      fprintf(stream,"    %c",((access_unit->primary_start == nal)?'*':' '));
+      report_nal(stdout,nal);
     }
   }
 }
@@ -172,7 +172,8 @@ extern int get_access_unit_bounds(access_unit_p     access_unit,
   int ii;
   if (access_unit->primary_start == NULL)
   {
-    print_err("### Cannot determine bounds of an access unit with no content\n");
+    KLOG(
+            "### Cannot determine bounds of an access unit with no content\n");
     return 1;
   }
 
@@ -314,8 +315,8 @@ static int access_unit_append(access_unit_p    access_unit,
   if (starts_primary && access_unit->started_primary_picture)
   {
     // Our caller should have started a new access unit instead
-    fprint_err("### Already had a start of primary picture in access"
-               " unit %d\n",access_unit->index);
+    KLOG("### Already had a start of primary picture in access"
+            " unit %d\n",access_unit->index);
     return 1;
   }
 
@@ -336,8 +337,8 @@ static int access_unit_append(access_unit_p    access_unit,
                                     pending->array[ii]);
       if (err)
       {
-        fprint_err("### Error extending access unit %d\n",
-                   access_unit->index);
+        KLOG("### Error extending access unit %d\n",
+                access_unit->index);
         return err;
       }
     }
@@ -348,8 +349,8 @@ static int access_unit_append(access_unit_p    access_unit,
     err = append_to_nal_unit_list(access_unit->nal_units,nal);
     if (err)
     {
-      fprint_err("### Error extending access unit %d\n",
-                 access_unit->index);
+      KLOG("### Error extending access unit %d\n",
+              access_unit->index);
       return err;
     }
   }
@@ -373,7 +374,7 @@ static int merge_access_unit_nals(access_unit_p   access_unit1,
                                   (*access_unit2)->nal_units->array[ii]);
     if (err)
     {
-      print_err("### Error merging two access units\n");
+      KLOG("### Error merging two access units\n");
       return err;
     }
   }
@@ -418,8 +419,8 @@ extern int write_access_unit_as_ES(access_unit_p           access_unit,
     err = write_ES_unit(output,&(access_unit->nal_units->array[ii]->unit));
     if (err)
     {
-      print_err("### Error writing NAL unit ");
-      report_nal(FALSE,access_unit->nal_units->array[ii]);
+      KLOG("### Error writing NAL unit ");
+      report_nal(stderr,access_unit->nal_units->array[ii]);
       return err;
     }
   }
@@ -429,8 +430,8 @@ extern int write_access_unit_as_ES(access_unit_p           access_unit,
     err = write_ES_unit(output,&(context->end_of_sequence->unit));
     if (err)
     {
-      print_err("### Error writing end of sequence NAL unit ");
-      report_nal(FALSE,context->end_of_sequence);
+      KLOG("### Error writing end of sequence NAL unit ");
+      report_nal(stderr,context->end_of_sequence);
       return err;
     }
     free_nal_unit(&context->end_of_sequence);
@@ -441,8 +442,8 @@ extern int write_access_unit_as_ES(access_unit_p           access_unit,
     err = write_ES_unit(output,&(context->end_of_stream->unit));
     if (err)
     {
-      print_err("### Error writing end of stream NAL unit ");
-      report_nal(FALSE,context->end_of_sequence);
+      KLOG("### Error writing end of stream NAL unit ");
+      report_nal(stderr,context->end_of_sequence);
       return err;
     }
     free_nal_unit(&context->end_of_stream);
@@ -477,8 +478,8 @@ static int write_access_unit_trailer_as_TS(access_unit_context_p  context,
                                     video_pid,DEFAULT_VIDEO_STREAM_ID);
     if (err)
     {
-      print_err("### Error writing end of sequence NAL unit ");
-      report_nal(FALSE,nal);
+      KLOG("### Error writing end of sequence NAL unit ");
+      report_nal(stderr,nal);
       return err;
     }
     free_nal_unit(&context->end_of_sequence);
@@ -491,8 +492,8 @@ static int write_access_unit_trailer_as_TS(access_unit_context_p  context,
                                     video_pid,DEFAULT_VIDEO_STREAM_ID);
     if (err)
     {
-      print_err("### Error writing end of stream NAL unit ");
-      report_nal(FALSE,nal);
+      KLOG("### Error writing end of stream NAL unit ");
+      report_nal(stderr,nal);
       return err;
     }
     free_nal_unit(&context->end_of_stream);
@@ -531,8 +532,8 @@ extern int write_access_unit_as_TS(access_unit_p          access_unit,
                                     video_pid,DEFAULT_VIDEO_STREAM_ID);
     if (err)
     {
-      print_err("### Error writing NAL unit ");
-      report_nal(FALSE,nal);
+      KLOG("### Error writing NAL unit ");
+      report_nal(stderr,nal);
       return err;
     }
   }
@@ -592,8 +593,8 @@ extern int write_access_unit_as_TS_with_pts_dts(access_unit_p          access_un
                                       video_pid,DEFAULT_VIDEO_STREAM_ID);
     if (err)
     {
-      print_err("### Error writing NAL unit ");
-      report_nal(FALSE,nal);
+      KLOG("### Error writing NAL unit ");
+      report_nal(stderr,nal);
       return err;
     }
   }
@@ -644,8 +645,8 @@ extern int write_access_unit_as_TS_with_PCR(access_unit_p          access_unit,
                                       video_pid,DEFAULT_VIDEO_STREAM_ID);
     if (err)
     {
-      print_err("### Error writing NAL unit ");
-      report_nal(FALSE,nal);
+      KLOG("### Error writing NAL unit ");
+      report_nal(stderr,nal);
       return err;
     }
   }
@@ -671,21 +672,21 @@ static inline int end_access_unit(access_unit_context_p context,
 {
   if (show_details)
   {
-    report_access_unit(access_unit);
+    report_access_unit(stdout,access_unit);
     if (context->pending_nal)
     {
-      print_msg("... pending: ");
-      report_nal(TRUE,context->pending_nal);
+      printf("... pending: ");
+      report_nal(stdout,context->pending_nal);
     }
     if (context->end_of_sequence)
     {
-      print_msg("--> EndOfSequence ");
-      report_nal(TRUE,context->end_of_sequence);
+      printf("--> EndOfSequence ");
+      report_nal(stdout,context->end_of_sequence);
     }
     if (context->end_of_stream)
     {
-      print_msg("--> EndOfStream ");
-      report_nal(TRUE,context->end_of_stream);
+      printf("--> EndOfStream ");
+      report_nal(stdout,context->end_of_stream);
     }
   }
   return 0;
@@ -703,7 +704,8 @@ extern int build_access_unit_context(ES_p                   es,
   access_unit_context_p  new = malloc(SIZEOF_ACCESS_UNIT_CONTEXT);
   if (new == NULL)
   {
-    print_err("### Unable to allocate access unit context datastructure\n");
+    KLOG(
+            "### Unable to allocate access unit context datastructure\n");
     return 1;
   }
 
@@ -718,14 +720,14 @@ extern int build_access_unit_context(ES_p                   es,
   err = build_nal_unit_context(es,&new->nac);
   if (err)
   {
-    print_err("### Error building access unit context datastructure\n");
+    KLOG("### Error building access unit context datastructure\n");
     free(new);
     return err;
   }
   err = build_nal_unit_list(&new->pending_list);
   if (err)
   {
-    print_err("### Error building access unit context datastructure\n");
+    KLOG("### Error building access unit context datastructure\n");
     free_nal_unit_context(&new->nac);
     free(new);
     return err;
@@ -848,7 +850,8 @@ static int remember_earlier_primary_start(access_unit_context_p context,
     int err = build_nal_unit(&tgt);
     if (err)
     {
-      print_err("### Error building NAL unit for 'earlier primary start'\n");
+      KLOG(
+              "### Error building NAL unit for 'earlier primary start'\n");
       free(tgt);
       return err;
     }
@@ -891,21 +894,21 @@ static int maybe_remember_access_unit(reverse_data_p  reverse_data,
     int err = get_access_unit_bounds(access_unit,&start_posn,&num_bytes);
     if (err)
     {
-      fprint_err("### Error working out position/size of access unit %d"
-                 " for reversing\n",access_unit->index);
+      KLOG("### Error working out position/size of access unit %d"
+              " for reversing\n",access_unit->index);
       return 1;
     }
     err = remember_reverse_h264_data(reverse_data,access_unit->index,
                                      start_posn,num_bytes);
     if (err)
     {
-      fprint_err("### Error remembering access unit %d for reversing\n",
-                 access_unit->index);
+      KLOG("### Error remembering access unit %d for reversing\n",
+              access_unit->index);
       return 1;
     }
-    if (verbose) fprint_msg("REMEMBER IDR %5d at " OFFSET_T_FORMAT_08
-                            "/%04d for %5d\n",access_unit->index,
-                            start_posn.infile,start_posn.inpacket,num_bytes);
+    if (verbose) printf("REMEMBER IDR %5d at " OFFSET_T_FORMAT_08
+                        "/%04d for %5d\n",access_unit->index,
+                        start_posn.infile,start_posn.inpacket,num_bytes);
   }
   return 0;
 }
@@ -990,13 +993,13 @@ extern int get_next_access_unit(access_unit_context_p context,
       //    unit).
       // Clearly, option (a) is the easiest to try, so let's see how that
       // works for now...
-      print_err("!!! Ignoring broken NAL unit\n");
+      KLOG("!!! Ignoring broken NAL unit\n");
       access_unit->ignored_broken_NAL_units ++;
       continue;
     }
     else if (err)
     {
-      print_err("### Error retrieving next NAL\n");
+      KLOG("### Error retrieving next NAL\n");
       goto give_up;
     }
     
@@ -1045,17 +1048,17 @@ extern int get_next_access_unit(access_unit_context_p context,
         // access unit. So what should we do? Ignore it?
         if (!quiet)
         {
-          print_err("!!! Ignoring VCL NAL that cannot start a picture:\n");
-          print_err("    ");
-          report_nal(FALSE,nal);
-          print_err("\n");
+          KLOG("!!! Ignoring VCL NAL that cannot start a picture:\n");
+          KLOG("    ");
+          report_nal(stderr,nal);
+          KLOG("\n");
         }
         free_nal_unit(&nal);
       }
       else if (nal_is_redundant(nal))
       {
         // pass
-        // print_msg("   ignoring redundant NAL unit\n");
+        // printf("   ignoring redundant NAL unit\n");
         free_nal_unit(&nal);
       }
       else
@@ -1081,15 +1084,15 @@ extern int get_next_access_unit(access_unit_context_p context,
         if (context->pending_list->length > 0 ||
             access_unit->nal_units->length > 0)
         {
-          print_err("!!! Ignoring incomplete access unit:\n");
+          KLOG("!!! Ignoring incomplete access unit:\n");
           if (access_unit->nal_units->length > 0)
           {
-            report_nal_unit_list(FALSE,"    ",access_unit->nal_units);
+            report_nal_unit_list(stderr,"    ",access_unit->nal_units);
             reset_nal_unit_list(access_unit->nal_units,TRUE);
           }
           if (context->pending_list->length > 0)
           {
-            report_nal_unit_list(FALSE,"    ",context->pending_list);
+            report_nal_unit_list(stderr,"    ",context->pending_list);
             reset_nal_unit_list(context->pending_list,TRUE);
           }
         }
@@ -1138,9 +1141,9 @@ extern int get_next_access_unit(access_unit_context_p context,
     {
       if (context->pending_list->length > 0)
       {
-        print_err("!!! Ignoring items after last VCL NAL and"
-                  " before End of Sequence:\n");
-        report_nal_unit_list(FALSE,"    ",context->pending_list);
+        KLOG("!!! Ignoring items after last VCL NAL and"
+                " before End of Sequence:\n");
+        report_nal_unit_list(stderr,"    ",context->pending_list);
         reset_nal_unit_list(context->pending_list,TRUE);
       }
       // And remember this as the End of Sequence marker
@@ -1151,9 +1154,9 @@ extern int get_next_access_unit(access_unit_context_p context,
     {
       if (context->pending_list->length > 0)
       {
-        print_err("!!! Ignoring items after last VCL NAL and"
-                  " before End of Stream:\n");
-        report_nal_unit_list(FALSE,"    ",context->pending_list);
+        KLOG("!!! Ignoring items after last VCL NAL and"
+                " before End of Stream:\n");
+        report_nal_unit_list(stderr,"    ",context->pending_list);
         reset_nal_unit_list(context->pending_list,TRUE);
       }
       // And remember this as the End of Stream marker
@@ -1269,22 +1272,22 @@ static int get_next_field_of_pair(access_unit_context_p  context,
   access_unit_p  second;
 
   if (show_details || context->nac->show_nal_details)
-    fprint_msg("@@ Looking for second field (%s time)\n",
-               (first_time?"first":"second"));
+    printf("@@ Looking for second field (%s time)\n",
+           (first_time?"first":"second"));
   
   // We assume (hope) the next picture will be our second half
   err = get_next_non_empty_access_unit(context,quiet,show_details,&second);
   if (err)
   {
     if (err != EOF)
-      print_err("### Trying to read second field\n");
+      KLOG("### Trying to read second field\n");
     return err;
   }
   
   if (second->field_pic_flag == 0)
   {
     if (!quiet)
-      print_err("!!! Field followed by a frame - ignoring the field\n");
+      KLOG("!!! Field followed by a frame - ignoring the field\n");
     free_access_unit(access_unit);
     *access_unit = second;
     // and pretend to success
@@ -1293,7 +1296,7 @@ static int get_next_field_of_pair(access_unit_context_p  context,
   {
     // They appear to be matching fields - make a frame from them
     if (show_details || context->nac->show_nal_details)
-      print_msg("@@ Merging two field access units\n");
+      printf("@@ Merging two field access units\n");
     err = merge_access_unit_nals(*access_unit,&second); // (frees `second`)
     if (err)
     {
@@ -1301,15 +1304,15 @@ static int get_next_field_of_pair(access_unit_context_p  context,
       return 1;
     }
     if (show_details)
-      report_access_unit(*access_unit);
+      report_access_unit(stdout,*access_unit);
   }
   else if (first_time)
   {
     if (!quiet)
-      fprint_err("!!! Field with frame number %d (%x) followed by"
-                 " field with frame number %d (%x) - ignoring first field\n",
-                 (*access_unit)->frame_num,(*access_unit)->frame_num,
-                 second->frame_num,second->frame_num);
+      KLOG("!!! Field with frame number %d (%x) followed by"
+              " field with frame number %d (%x) - ignoring first field\n",
+              (*access_unit)->frame_num,(*access_unit)->frame_num,
+              second->frame_num,second->frame_num);
 
     // Try again
     free_access_unit(access_unit);
@@ -1319,8 +1322,8 @@ static int get_next_field_of_pair(access_unit_context_p  context,
   }
   else
   {
-    print_err("### Adjacent fields do not share frame numbers"
-              " - unable to match fields up\n");
+    KLOG("### Adjacent fields do not share frame numbers"
+            " - unable to match fields up\n");
     return 1;
   }
   return 0;

@@ -66,7 +66,7 @@ static int write_program_data_A(PES_reader_p  reader,
                                               reader->video_pid);
       if (stream == NULL)
       {
-        fprintf(stderr,"### Cannot find video PID %04x in program map\n",
+        KLOG("### Cannot find video PID %04x in program map\n",
                 reader->video_pid);
         return 1;
       }
@@ -81,7 +81,7 @@ static int write_program_data_A(PES_reader_p  reader,
                                               reader->audio_pid);
       if (stream == NULL)
       {
-        fprintf(stderr,"### Cannot find audio PID %04x in program map\n",
+        KLOG("### Cannot find audio PID %04x in program map\n",
                 reader->audio_pid);
         return 1;
       }
@@ -119,7 +119,7 @@ static int write_program_data_A(PES_reader_p  reader,
                                num_progs,prog_pids,prog_type);
   if (err)
   {
-    fprintf(stderr,"### Error writing out TS program data\n");
+    KLOG("### Error writing out TS program data\n");
     return 1;
   }
   return 0;
@@ -154,7 +154,7 @@ static int play_pes_packets(PES_reader_p   reader,
   err = build_elementary_stream_PES(reader,&es);
   if (err)
   {
-    fprintf(stderr,"### Error trying to build ES reader from PES reader\n");
+    KLOG("### Error trying to build ES reader from PES reader\n");
     return 1;
   }
 
@@ -177,7 +177,7 @@ static int play_pes_packets(PES_reader_p   reader,
       break;
     else if (err)
     {
-      fprintf(stderr,"### Error copying NAL units\n");
+      KLOG("### Error copying NAL units\n");
       return err;
     }
 
@@ -186,7 +186,7 @@ static int play_pes_packets(PES_reader_p   reader,
                                     DEFAULT_VIDEO_STREAM_ID);
     if (err)
     {
-      fprintf(stderr,"### Error writing MPEG2 item\n");
+      KLOG("### Error writing MPEG2 item\n");
       return err;
     }
 
@@ -218,7 +218,7 @@ static int test1(PES_reader_p  reader,
     }
     else if (err)
     {
-      fprintf(stderr,"### test_pes: Error reading next PES packet\n");
+      KLOG("### test_pes: Error reading next PES packet\n");
       return 1;
     }
     packet = reader->packet;
@@ -226,9 +226,9 @@ static int test1(PES_reader_p  reader,
     {
       printf("\n>> PS packet at " OFFSET_T_FORMAT " is %02x (",
              packet->posn,packet->data[3]);
-      print_stream_id(TRUE,packet->data[3]);
+      print_stream_id(stdout,packet->data[3]);
       printf(")\n");
-      print_data(TRUE,"   Data",packet->data,packet->data_len,20);
+      print_data(stdout,"   Data",packet->data,packet->data_len,20);
 
       err = report_PES_data_array("",packet->data,packet->data_len,FALSE);
       if (err) return 1;
@@ -238,7 +238,7 @@ static int test1(PES_reader_p  reader,
   err = read_next_PES_packet(reader);
   if (err)
   {
-    fprintf(stderr,"### test_pes: Error reading next PES packet\n");
+    KLOG("### test_pes: Error reading next PES packet\n");
     return 1;
   }
   packet = reader->packet;
@@ -246,15 +246,15 @@ static int test1(PES_reader_p  reader,
   {
     printf("\n>> PS packet at " OFFSET_T_FORMAT " is %02x (",
            packet->posn,packet->data[3]);
-    print_stream_id(TRUE,packet->data[3]);
+    print_stream_id(stdout,packet->data[3]);
     printf(")\n");
-    print_data(TRUE,"   Data",packet->data,packet->data_len,20);
+    print_data(stdout,"   Data",packet->data,packet->data_len,20);
   }
 
   old_data = malloc(packet->data_len);
   if (old_data == NULL)
   {
-    fprintf(stderr,"### Error allocating data array\n");
+    KLOG("### Error allocating data array\n");
     return 1;
   }
   memcpy(old_data,packet->data,packet->data_len);
@@ -265,7 +265,7 @@ static int test1(PES_reader_p  reader,
   err = set_PES_reader_position(reader,packet->posn);
   if (err)
   {
-    fprintf(stderr,"### test_pes: Error seeking to previous PES packet\n");
+    KLOG("### test_pes: Error seeking to previous PES packet\n");
     free(old_data);
     return 1;
   }
@@ -275,7 +275,7 @@ static int test1(PES_reader_p  reader,
   err = read_next_PES_packet(reader);
   if (err)
   {
-    fprintf(stderr,"### test_pes: Error reading next PES packet\n");
+    KLOG("### test_pes: Error reading next PES packet\n");
     free(old_data);
     return 1;
   }
@@ -284,13 +284,13 @@ static int test1(PES_reader_p  reader,
   {
     printf("\n>> PS packet at " OFFSET_T_FORMAT " is %02x (",
            packet->posn,packet->data[3]);
-    print_stream_id(TRUE,packet->data[3]);
+    print_stream_id(stdout,packet->data[3]);
     printf(")\n");
-    print_data(TRUE,"   Data",packet->data,packet->data_len,20);
+    print_data(stdout,"   Data",packet->data,packet->data_len,20);
   }
   if (packet->data_len != old_data_len)
   {
-    fprintf(stderr,
+    KLOG(
             "### Test1: first packet length %d, second packet length %d\n",
             old_data_len,packet->data_len);
     free(old_data);
@@ -298,9 +298,9 @@ static int test1(PES_reader_p  reader,
   }
   else if (memcmp(packet->data,old_data,packet->data_len))
   {
-    fprintf(stderr,"### Test1: packet data differs\n");
-    print_data(FALSE,"    Packet 1",old_data,old_data_len,50);
-    print_data(FALSE,"    Packet 2",packet->data,packet->data_len,50);
+    KLOG("### Test1: packet data differs\n");
+    print_data(stderr,"    Packet 1",old_data,old_data_len,50);
+    print_data(stderr,"    Packet 2",packet->data,packet->data_len,50);
     free(old_data);
     return 1;
   }
@@ -391,7 +391,7 @@ int main(int argc, char **argv)
       }
       else
       {
-        fprintf(stderr,"### test_pes: "
+        KLOG("### test_pes: "
                 "Unrecognised command line switch '%s'\n",argv[ii]);
         return 1;
       }
@@ -400,7 +400,7 @@ int main(int argc, char **argv)
     {
       if (had_input_name && (want_output && had_output_name))
       {
-        fprintf(stderr,"### test_pes: Unexpected '%s'\n",argv[ii]);
+        KLOG("### test_pes: Unexpected '%s'\n",argv[ii]);
         return 1;
       }
       else if (had_input_name && want_output)
@@ -421,19 +421,19 @@ int main(int argc, char **argv)
 
   if (!had_input_name)
   {
-    fprintf(stderr,"### test_pes: No input file specified\n");
+    KLOG("### test_pes: No input file specified\n");
     return 1;
   }
   if (want_output && !had_output_name)
   {
-    fprintf(stderr,"### test_pes: No target host specified\n");
+    KLOG("### test_pes: No target host specified\n");
     return 1;
   }
 
   err = open_PES_reader(input_name,!quiet,!quiet,&reader);
   if (err)
   {
-    fprintf(stderr,"### test_pes: Error opening file %s\n",input_name);
+    KLOG("### test_pes: Error opening file %s\n",input_name);
     return 1;
   }
 
@@ -448,7 +448,7 @@ int main(int argc, char **argv)
     if (err)
     {
       (void) close_PES_reader(&reader);
-      fprintf(stderr,"### test_pes: Unable to connect to %s\n",output_name);
+      KLOG("### test_pes: Unable to connect to %s\n",output_name);
       return 1;
     }
   }
@@ -456,7 +456,7 @@ int main(int argc, char **argv)
   err = test1(reader,verbose);
   if (err)
   {
-    fprintf(stderr,"### test_pes: Test 1 failed\n");
+    KLOG("### test_pes: Test 1 failed\n");
     (void) close_PES_reader(&reader);
     (void) tswrite_close(output,TRUE);
     return 1;
@@ -467,7 +467,7 @@ int main(int argc, char **argv)
   err = set_PES_reader_position(reader,0);
   if (err)
   {
-    fprintf(stderr,"### test_pes: Error seeking to previous PES packet\n");
+    KLOG("### test_pes: Error seeking to previous PES packet\n");
     return 1;
   }
 
@@ -476,7 +476,7 @@ int main(int argc, char **argv)
     err = play_pes_packets(reader,output);
     if (err)
     {
-      fprintf(stderr,"### test_pes: Error playing PES packets\n");
+      KLOG("### test_pes: Error playing PES packets\n");
       (void) close_PES_reader(&reader);
       (void) tswrite_close(output,TRUE);
       return 1;
@@ -487,13 +487,13 @@ int main(int argc, char **argv)
   {
     err = tswrite_close(output,quiet);
     if (err)
-      fprintf(stderr,"### test_pes: Error closing output %s: %s\n",output_name,
+      KLOG("### test_pes: Error closing output %s: %s\n",output_name,
               strerror(errno));
   }
   err = close_PES_reader(&reader);
   if (err)
   {
-    fprintf(stderr,"### test_pes: Error closing file %s\n",input_name);
+    KLOG("### test_pes: Error closing file %s\n",input_name);
     return 1;
   }
   

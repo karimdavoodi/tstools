@@ -32,7 +32,7 @@
 #include "h262_defns.h"
 
 /*
- * Print out information derived from the start code
+ * Print out information derived from the start code, to the given stream.
  *
  * Note that if a "SYSTEM START" code is reported, then the data is
  * likely to be PES or Transport Stream data, not Elementary Stream.
@@ -44,7 +44,8 @@
  * that some of the apparent start code prefixes are actually false
  * detections.
  */
-extern void print_h262_start_code_str(byte   start_code);
+extern void print_h262_start_code_str(FILE  *stream,
+                                      byte   start_code);
 /*
  * Build a new MPEG2 item datastructure.
  *
@@ -60,9 +61,10 @@ extern int build_h262_item(h262_item_p  *item);
  */
 extern void free_h262_item(h262_item_p  *item);
 /*
- * Print out useful information about this MPEG2 item
+ * Print out useful information about this MPEG2 item, on the given stream.
  */
-extern void report_h262_item(h262_item_p  item);
+extern void report_h262_item(FILE   *stream,
+                             h262_item_p  item);
 // ------------------------------------------------------------
 // MPEG2 item *data* stuff
 // ------------------------------------------------------------
@@ -222,10 +224,12 @@ extern int write_h262_picture_as_ES(FILE           *output,
 /*
  * Report on an H.262 picture's contents.
  *
+ * - `stream` is where to write the information
  * - `picture` is the picture to report on
  * - if `report_data`, then the component ES units will be printed out as well
  */
-extern void report_h262_picture(h262_picture_p  picture,
+extern void report_h262_picture(FILE           *stream,
+                                h262_picture_p  picture,
                                 int             report_data);
 
 #endif // _h262_fns

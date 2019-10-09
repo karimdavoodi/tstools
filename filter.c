@@ -45,7 +45,6 @@
 #include "accessunit_fns.h"
 #include "h262_fns.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "filter_fns.h"
 
 #define DEBUG 0
@@ -64,7 +63,7 @@ static int new_h262_filter_context(h262_filter_context_p *fcontext)
   h262_filter_context_p new = malloc(SIZEOF_H262_FILTER_CONTEXT);
   if (new == NULL)
   {
-    print_err("### Unable to allocate H.262 filter context\n");
+    KLOG("### Unable to allocate H.262 filter context\n");
     return 1;
   }
   new->h262 = NULL;
@@ -178,7 +177,7 @@ static int new_h264_filter_context(h264_filter_context_p *fcontext)
   h264_filter_context_p new = malloc(SIZEOF_H264_FILTER_CONTEXT);
   if (new == NULL)
   {
-    print_err("### Unable to allocate H.264 filter context\n");
+    KLOG("### Unable to allocate H.264 filter context\n");
     return 1;
   }
 
@@ -342,8 +341,8 @@ extern int get_next_stripped_h262_frame(h262_filter_context_p  fcontext,
 
   if (fcontext->filter)
   {
-    print_err("### Calling get_next_stripped_h262_frame with a context"
-              " set for filtering\n");
+    KLOG("### Calling get_next_stripped_h262_frame with a context"
+            " set for filtering\n");
     return 1;
   }
 
@@ -364,7 +363,7 @@ extern int get_next_stripped_h262_frame(h262_filter_context_p  fcontext,
     }
     else if (err)
     {
-      print_err("### Error filtering H.262 frames\n");
+      KLOG("### Error filtering H.262 frames\n");
       return 1;
     }
 
@@ -381,8 +380,8 @@ extern int get_next_stripped_h262_frame(h262_filter_context_p  fcontext,
         else
           *seq_hdr = NULL;
         fcontext->new_seq_hdr = FALSE;
-        if (verbose) fprint_msg(">> %s picture \n",
-                                (this_picture->picture_coding_type==1?"I":"P"));
+        if (verbose) printf(">> %s picture \n",
+                            (this_picture->picture_coding_type==1?"I":"P"));
         return 0;
       }
       else
@@ -395,11 +394,11 @@ extern int get_next_stripped_h262_frame(h262_filter_context_p  fcontext,
       {
         fcontext->last_seq_hdr = this_picture;
         fcontext->new_seq_hdr = TRUE;
-        if (verbose) print_msg(">> First sequence header\n");
+        if (verbose) printf(">> First sequence header\n");
       }
       else if (!same_h262_picture(this_picture,fcontext->last_seq_hdr))
       {
-        if (verbose) print_msg(">> Different sequence header\n");
+        if (verbose) printf(">> Different sequence header\n");
         free_h262_picture(&fcontext->last_seq_hdr);
         fcontext->last_seq_hdr = this_picture;
         fcontext->new_seq_hdr = TRUE;
@@ -407,7 +406,7 @@ extern int get_next_stripped_h262_frame(h262_filter_context_p  fcontext,
       else
       {
         fcontext->new_seq_hdr = FALSE;
-        if (verbose) print_msg(">> Identical sequence header\n");
+        if (verbose) printf(">> Identical sequence header\n");
         free_h262_picture(&this_picture);
       }
     }
@@ -468,8 +467,8 @@ extern int get_next_filtered_h262_frame(h262_filter_context_p  fcontext,
 
   if (!fcontext->filter)
   {
-    print_err("### Calling get_next_filtered_h262_frame with a context"
-              " set for stripping\n");
+    KLOG("### Calling get_next_filtered_h262_frame with a context"
+            " set for stripping\n");
     return 1;
   }
 
@@ -495,7 +494,7 @@ extern int get_next_filtered_h262_frame(h262_filter_context_p  fcontext,
     }
     else if (err)
     {
-      print_err("### Error filtering H.262 frames\n");
+      KLOG("### Error filtering H.262 frames\n");
       fcontext->h262->add_fake_afd = FALSE;
       return 1;
     }
@@ -517,7 +516,7 @@ extern int get_next_filtered_h262_frame(h262_filter_context_p  fcontext,
         // It is an I picture, but it is too soon
         if (verbose)
         {
-          fprint_msg("+++ %d/%d DROP: Too soon\n",fcontext->count,fcontext->freq);
+          printf("+++ %d/%d DROP: Too soon\n",fcontext->count,fcontext->freq);
         }
       }
       else if (this_picture->picture_coding_type != 1)
@@ -525,7 +524,7 @@ extern int get_next_filtered_h262_frame(h262_filter_context_p  fcontext,
         // It is not an I picture
         if (verbose)
         {
-          fprint_msg("+++ %d/%d DROP: %s picture\n",fcontext->count,fcontext->freq,
+          printf("+++ %d/%d DROP: %s picture\n",fcontext->count,fcontext->freq,
                  H262_PICTURE_CODING_STR(this_picture->picture_coding_type));
         }
         // But do we want to pad with (i.e., repeat) the previous I picture?
@@ -535,7 +534,7 @@ extern int get_next_filtered_h262_frame(h262_filter_context_p  fcontext,
           int repeat = pictures_wanted - fcontext->frames_written;
           if (repeat > 0 && fcontext->had_previous_picture)
           {
-            if (verbose) print_msg(">>> output last picture again\n");
+            if (verbose) printf(">>> output last picture again\n");
             free_h262_picture(&this_picture);
             *seq_hdr = NULL;
             *frame = NULL;
@@ -549,7 +548,7 @@ extern int get_next_filtered_h262_frame(h262_filter_context_p  fcontext,
         // It was an I picture, and not too soon
         if (verbose)
         {
-          fprint_msg("+++ %d/%d KEEP\n",fcontext->count,fcontext->freq);
+          printf("+++ %d/%d KEEP\n",fcontext->count,fcontext->freq);
         }
         fcontext->count = 0;
         fcontext->had_previous_picture = TRUE;
@@ -613,7 +612,7 @@ extern int get_next_stripped_h264_frame(h264_filter_context_p  fcontext,
       return COMMAND_RETURN_CODE;
 
     if (verbose)
-      print_msg("\n");
+      printf("\n");
 
     err = get_next_h264_frame(fcontext->access_unit_context,quiet,verbose,
                               &this_access_unit);
@@ -630,14 +629,14 @@ extern int get_next_stripped_h264_frame(h264_filter_context_p  fcontext,
       // There seems little point in keeping the access unit
       keep = FALSE;
       if (verbose)
-        print_msg("++ DROP: no primary picture\n");
+        printf("++ DROP: no primary picture\n");
     }
     else if (this_access_unit->primary_start->nal_ref_idc == 0)
     {
       // This is not a reference frame, so it's of no interest
       keep = FALSE;
       if (verbose)
-        print_msg("++ DROP: not reference\n");
+        printf("++ DROP: not reference\n");
     }
     else if (fcontext->allref)
     {
@@ -647,13 +646,13 @@ extern int get_next_stripped_h264_frame(h264_filter_context_p  fcontext,
       {
         keep = TRUE;
         if (verbose)
-          print_msg("++ KEEP: reference picture\n");
+          printf("++ KEEP: reference picture\n");
       }
       else
       {
         keep = FALSE;
         if (verbose)
-          print_msg("++ DROP: sequence or parameter set, etc.\n");
+          printf("++ DROP: sequence or parameter set, etc.\n");
       }
     }
     else
@@ -663,20 +662,20 @@ extern int get_next_stripped_h264_frame(h264_filter_context_p  fcontext,
       {
         keep = TRUE;
         if (verbose)
-          print_msg("++ KEEP: IDR picture\n");
+          printf("++ KEEP: IDR picture\n");
       }
       else if (this_access_unit->primary_start->nal_unit_type == NAL_NON_IDR &&
                all_slices_I(this_access_unit))
       {
         keep = TRUE;
         if (verbose)
-          print_msg("++ KEEP: all slices I\n");
+          printf("++ KEEP: all slices I\n");
       }
       else
       {
         keep = FALSE;
         if (verbose)
-          print_msg("++ DROP: not IDR or all slices I\n");
+          printf("++ DROP: not IDR or all slices I\n");
       }
     }
 
@@ -737,7 +736,7 @@ extern int get_next_filtered_h264_frame(h264_filter_context_p  fcontext,
       return COMMAND_RETURN_CODE;
 
     if (verbose)
-      print_msg("\n");
+      printf("\n");
 
     err = get_next_h264_frame(fcontext->access_unit_context,quiet,verbose,
                               &this_access_unit);
@@ -757,16 +756,16 @@ extern int get_next_filtered_h264_frame(h264_filter_context_p  fcontext,
       // There seems little point in keeping the access unit
       keep = FALSE;
       if (verbose)
-        fprint_msg("++ %d/%d DROP: no primary picture\n",
-                   fcontext->count,fcontext->freq);
+        printf("++ %d/%d DROP: no primary picture\n",
+               fcontext->count,fcontext->freq);
     }
     else if (this_access_unit->primary_start->nal_ref_idc == 0)
     {
       // This is not a reference frame, so it's of no interest
       keep = FALSE;
       if (verbose)
-        fprint_msg("++ %d/%d DROP: not a reference frame\n",
-                   fcontext->count,fcontext->freq);
+        printf("++ %d/%d DROP: not a reference frame\n",
+               fcontext->count,fcontext->freq);
     }
     else if (this_access_unit->primary_start->nal_unit_type == NAL_IDR &&
              fcontext->last_accepted_was_not_IDR)
@@ -782,8 +781,8 @@ extern int get_next_filtered_h264_frame(h264_filter_context_p  fcontext,
       fcontext->skipped_ref_pic = FALSE;
       fcontext->last_accepted_was_not_IDR = FALSE;
       if (verbose)
-        fprint_msg("++ %d/%d KEEP: IDR and last was not\n",
-                   fcontext->count,fcontext->freq);
+        printf("++ %d/%d KEEP: IDR and last was not\n",
+               fcontext->count,fcontext->freq);
     }
     else if (this_access_unit->primary_start->nal_unit_type == NAL_IDR &&
              fcontext->not_had_IDR)
@@ -794,8 +793,8 @@ extern int get_next_filtered_h264_frame(h264_filter_context_p  fcontext,
       fcontext->skipped_ref_pic = FALSE;
       fcontext->last_accepted_was_not_IDR = FALSE;
       if (verbose)
-        fprint_msg("++ %d/%d KEEP: IDR and first IDR of filter run\n",
-                   fcontext->count,fcontext->freq);
+        printf("++ %d/%d KEEP: IDR and first IDR of filter run\n",
+               fcontext->count,fcontext->freq);
     }
     else if (fcontext->count < fcontext->freq)
     {
@@ -804,8 +803,8 @@ extern int get_next_filtered_h264_frame(h264_filter_context_p  fcontext,
       keep = FALSE;
       fcontext->skipped_ref_pic = TRUE;
       if (verbose)
-        fprint_msg("++ %d/%d DROP: Too soon (skipping ref frame)\n",
-                   fcontext->count,fcontext->freq);
+        printf("++ %d/%d DROP: Too soon (skipping ref frame)\n",
+               fcontext->count,fcontext->freq);
     }
     else if (this_access_unit->primary_start->nal_unit_type == NAL_IDR)
     {
@@ -814,7 +813,7 @@ extern int get_next_filtered_h264_frame(h264_filter_context_p  fcontext,
       fcontext->skipped_ref_pic = FALSE;
       fcontext->last_accepted_was_not_IDR = FALSE;
       if (verbose)
-        fprint_msg("++ %d/%d KEEP: IDR\n",fcontext->count,fcontext->freq);
+        printf("++ %d/%d KEEP: IDR\n",fcontext->count,fcontext->freq);
     }
     else if (all_slices_I(this_access_unit))
     {
@@ -823,7 +822,7 @@ extern int get_next_filtered_h264_frame(h264_filter_context_p  fcontext,
       keep = TRUE;
       fcontext->last_accepted_was_not_IDR = TRUE;
       if (verbose)
-        fprint_msg("++ %d/%d KEEP: I frame\n",fcontext->count,fcontext->freq);
+        printf("++ %d/%d KEEP: I frame\n",fcontext->count,fcontext->freq);
     }
     else if (!fcontext->skipped_ref_pic && all_slices_I_or_P(this_access_unit))
     {
@@ -833,16 +832,16 @@ extern int get_next_filtered_h264_frame(h264_filter_context_p  fcontext,
       keep = TRUE;
       fcontext->last_accepted_was_not_IDR = TRUE;
       if (verbose)
-        fprint_msg("++ %d/%d KEEP: P frame. no skipped ref frames\n",
-                   fcontext->count,fcontext->freq);
+        printf("++ %d/%d KEEP: P frame. no skipped ref frames\n",
+               fcontext->count,fcontext->freq);
     }
     else
     {
       keep = FALSE;
       fcontext->skipped_ref_pic = TRUE;
       if (verbose)
-        fprint_msg("++ %d/%d DROP: ref frame skipped earlier\n",
-                   fcontext->count,fcontext->freq);
+        printf("++ %d/%d DROP: ref frame skipped earlier\n",
+               fcontext->count,fcontext->freq);
     }
 
     if (keep)
@@ -861,7 +860,7 @@ extern int get_next_filtered_h264_frame(h264_filter_context_p  fcontext,
         int repeat = access_units_wanted - fcontext->frames_written;
         if (repeat > 0 && fcontext->had_previous_access_unit)
         {
-          if (verbose) print_msg(">>> output last access unit again\n");
+          if (verbose) printf(">>> output last access unit again\n");
           free_access_unit(&this_access_unit);
           *frame = NULL;
           fcontext->frames_written ++;

@@ -46,7 +46,6 @@
 #include "nalunit_fns.h"
 #include "h262_fns.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "version.h"
 
 #define STREAM_IS_TS     10
@@ -73,43 +72,43 @@ static int check_if_TS(int   input,
   int  ii;
 
   if (verbose)
-    print_msg("Is it Transport Stream?\n");
+    printf("Is it Transport Stream?\n");
 
   // It may be enough to look at the first byte of the stream
   if (cur_byte != 0x47)
   {
     if (verbose)
-      fprint_msg("  First byte in file is 0x%02X not 0x47, so it is not\n",cur_byte);
+      printf("  First byte in file is 0x%02X not 0x47, so it is not\n",cur_byte);
     return 0;
   }
 
   // Transport Stream packets start with 0x47, so it's a good bet.
   if (verbose)
-    print_msg("  First byte in file is 0x47, so it looks like Transport Stream\n");
+    printf("  First byte in file is 0x47, so it looks like Transport Stream\n");
 
   // To check a bit, we can try looking at every 188th byte
   if (verbose)
-    print_msg("  Checking next 500 packets to see if they start 0x47\n");
+    printf("  Checking next 500 packets to see if they start 0x47\n");
   for (ii=0; ii<500; ii++)
   {
     byte buf[TS_PACKET_SIZE];
     int err = read_bytes(input,TS_PACKET_SIZE,buf);
     if (err)
     {
-      fprint_err("### %s trying to read start of packet %d\n",
-                 (err==EOF?"EOF":"Error"),ii+1);
+      KLOG("### %s trying to read start of packet %d\n",
+              (err==EOF?"EOF":"Error"),ii+1);
       return 1;
     }
     if (buf[TS_PACKET_SIZE-1] != 0x47)
     {
       if (verbose)
-        fprint_msg("  Packet %d does not start with 0x47 (%02x instead)\n",
-                   ii+1,buf[TS_PACKET_SIZE-1]);
+        printf("  Packet %d does not start with 0x47 (%02x instead)\n",
+               ii+1,buf[TS_PACKET_SIZE-1]);
       return 0;
     }
   }
   if (verbose)
-    print_msg("The checked packets all start with 0x47 - looks like TS\n");
+    printf("The checked packets all start with 0x47 - looks like TS\n");
   *decided = TRUE;
   *result  = STREAM_IS_TS;
   return 0;
@@ -131,52 +130,52 @@ static int check_if_PS(int   input,
 
   if (verbose)
   {
-    print_msg("Is it Program Stream?\n");
-    print_msg("  Trying to read pack header\n");
+    printf("Is it Program Stream?\n");
+    printf("  Trying to read pack header\n");
   }
 
   err = read_bytes(input,4,buf);
   if (err)
   {
-    fprint_err("### %s trying to read start of first PS packet\n",
-               (err==EOF?"EOF":"Error"));
+    KLOG("### %s trying to read start of first PS packet\n",
+            (err==EOF?"EOF":"Error"));
     return 1;
   }
 
   if (buf[0] != 0 || buf[1] != 0 || buf[2] != 1 || buf[3] != 0xba)
   {
     if (verbose)
-      fprint_msg("  File starts %02X %02X %02X %02X, not 00 00 01 BA - not PS\n",
-                 buf[0],buf[1],buf[2],buf[3]);
+      printf("  File starts %02X %02X %02X %02X, not 00 00 01 BA - not PS\n",
+             buf[0],buf[1],buf[2],buf[3]);
     return 0;
   }
 
   if (verbose)
-    print_msg("  File starts 00 00 01 BA - could be PS,"
-              " reading pack header body\n");
+    printf("  File starts 00 00 01 BA - could be PS,"
+           " reading pack header body\n");
   
   err = read_bytes(input,8,buf);
   if (err)
   {
-    fprint_err("### %s trying to read body of PS pack header\n",
-               (err==EOF?"EOF":"Error"));
+    KLOG("### %s trying to read body of PS pack header\n",
+            (err==EOF?"EOF":"Error"));
     return 1;
   }
   
   if ((buf[0] & 0xF0) == 0x20)
   {
     if (verbose)
-      print_msg("  Looks like ISO/IEC 11171-1/MPEG-1 pack header\n");
+      printf("  Looks like ISO/IEC 11171-1/MPEG-1 pack header\n");
   }
   else if ((buf[0] & 0xC0) == 0x40)
   {
     if (verbose)
-      print_msg("  Looks like ISO/IEC 13818-1/H.222.0 pack header\n");
+      printf("  Looks like ISO/IEC 13818-1/H.222.0 pack header\n");
     err = read_bytes(input,2,&(buf[8]));
     if (err)
     {
-      fprint_err("### %s trying to read last 2 bytes of body of PS pack header\n",
-                 (err==EOF?"EOF":"Error"));
+      KLOG("### %s trying to read last 2 bytes of body of PS pack header\n",
+              (err==EOF?"EOF":"Error"));
       return 1;
     }
 
@@ -188,8 +187,8 @@ static int check_if_PS(int   input,
       err = read_bytes(input,stuffing_length,buf);
       if (err)
       {
-        fprint_err("### %s trying to read PS pack header stuffing bytes\n",
-                   (err==EOF?"EOF":"Error"));
+        KLOG("### %s trying to read PS pack header stuffing bytes\n",
+                (err==EOF?"EOF":"Error"));
         return 1;
       }
     }
@@ -198,26 +197,26 @@ static int check_if_PS(int   input,
   // We could check for reserved bits - maybe at another time
 
   if (verbose)
-    print_msg("  OK, trying to read start of next packet\n");
+    printf("  OK, trying to read start of next packet\n");
 
   err = read_bytes(input,4,buf);
   if (err)
   {
-    fprint_err("### %s trying to read start of next PS packet\n",
-               (err==EOF?"EOF":"Error"));
+    KLOG("### %s trying to read start of next PS packet\n",
+            (err==EOF?"EOF":"Error"));
     return 1;
   }
 
   if (buf[0] != 0 || buf[1] != 0 || buf[2] != 1)
   {
     if (verbose)
-      fprint_msg("  Next 'packet' starts %02X %02X %02X, not 00 00 01 - not PS\n",
-                 buf[0],buf[1],buf[2]);
+      printf("  Next 'packet' starts %02X %02X %02X, not 00 00 01 - not PS\n",
+             buf[0],buf[1],buf[2]);
     return 0;
   }
 
   if (verbose)
-    print_msg("  Start of second packet found at right place - looks like PS\n");
+    printf("  Start of second packet found at right place - looks like PS\n");
 
   *decided = TRUE;
   *result  = STREAM_IS_PS;
@@ -257,12 +256,12 @@ static int determine_packet_type(int   input,
   length = read(input,&first_byte,1);
   if (length == 0)
   {
-    print_err("### EOF reading first byte\n");
+    KLOG("### EOF reading first byte\n");
     return 1;
   }
   else if (length == -1)
   {
-    fprint_err("### Error reading first byte: %s\n",strerror(errno));
+    KLOG("### Error reading first byte: %s\n",strerror(errno));
     return 1;
   }
   
@@ -298,7 +297,7 @@ static int determine_packet_type(int   input,
   
   // Does it look like one of the types of ES we recognise?
   if (verbose)
-    print_msg("Is it an Elementary Stream we recognise?\n");
+    printf("Is it an Elementary Stream we recognise?\n");
 
   err = decide_ES_file_video_type(input,!verbose,verbose,&video_type);
   if (err)
@@ -324,11 +323,11 @@ static int determine_packet_type(int   input,
   case VIDEO_UNKNOWN:
     *result = STREAM_IS_UNSURE;
     *decided = FALSE;
-    if (verbose) print_msg("Still not sure\n");
+    if (verbose) printf("Still not sure\n");
     break;
   default:
-    fprint_msg("### stream_type: Unexpected decision from"
-               " decide_ES_file_video_type: %d\n",video_type);
+    printf("### stream_type: Unexpected decision from"
+           " decide_ES_file_video_type: %d\n",video_type);
     close_file(input);
     return 1;
   }
@@ -339,12 +338,12 @@ static int determine_packet_type(int   input,
 
 static void print_usage()
 {
-  print_msg(
+  printf(
     "Usage: stream_type [switches] <infile>\n"
     "\n"
     );
   REPORT_VERSION("stream_type");
-  print_msg(
+  printf(
     "\n"
     "  Attempt to determine if an input stream is Transport Stream,\n"
     "  Program Stream, or Elementary Stream, and if the latter, if it\n"
@@ -377,8 +376,6 @@ static void print_usage()
     "  <infile>           is the file to analyse\n"
     "\n"
     "Switches:\n"
-    "  -err stdout       Write error messages to standard output (the default)\n"
-    "  -err stderr       Write error messages to standard error (Unix traditional)\n"
     "  -verbose, -v      Output more detailed information about how it is\n"
     "                    making its decision\n"
     "  -quiet, -q        Only output error messages\n"
@@ -418,22 +415,6 @@ int main(int argc, char **argv)
         verbose = TRUE;
         quiet = FALSE;
       }
-      else if (!strcmp("-err",argv[ii]))
-      {
-        CHECKARG("stream_type",ii);
-        if (!strcmp(argv[ii+1],"stderr"))
-          redirect_output_stderr();
-        else if (!strcmp(argv[ii+1],"stdout"))
-          redirect_output_stdout();
-        else
-        {
-          fprint_err("### stream_type: "
-                     "Unrecognised option '%s' to -err (not 'stdout' or"
-                     " 'stderr')\n",argv[ii+1]);
-          return 1;
-        }
-        ii++;
-      }
       else if (!strcmp("-quiet",argv[ii]) || !strcmp("-q",argv[ii]))
       {
         verbose = FALSE;
@@ -441,8 +422,8 @@ int main(int argc, char **argv)
       }
       else
       {
-        fprint_err("### stream_type: "
-                   "Unrecognised command line switch '%s'\n",argv[ii]);
+        KLOG("### stream_type: "
+                "Unrecognised command line switch '%s'\n",argv[ii]);
         return STREAM_IS_ERROR;
       }
     }
@@ -450,7 +431,7 @@ int main(int argc, char **argv)
     {
       if (had_input_name)
       {
-        fprint_err("### stream_type: Unexpected '%s'\n",argv[ii]);
+        KLOG("### stream_type: Unexpected '%s'\n",argv[ii]);
         return STREAM_IS_ERROR;
       }
       else
@@ -464,26 +445,26 @@ int main(int argc, char **argv)
   
   if (!had_input_name)
   {
-    print_err("### stream_type: No input file specified\n");
+    KLOG("### stream_type: No input file specified\n");
     return STREAM_IS_ERROR;
   }
   
   input = open_binary_file(input_name,FALSE);
   if (input == -1)
   {
-    fprint_err("### stream_type: Unable to open input file %s\n",
-               input_name);
+    KLOG("### stream_type: Unable to open input file %s\n",
+            input_name);
     return 1;
   }
 
   if (!quiet)
-    fprint_msg("Reading from %s\n",input_name);
+    printf("Reading from %s\n",input_name);
   
   // Try to guess
   err = determine_packet_type(input,verbose,&decided,&result);
   if (err)
   {
-    print_err("### Unable to decide on stream type due to error\n");
+    KLOG("### Unable to decide on stream type due to error\n");
     return STREAM_IS_ERROR;
   }
 
@@ -491,7 +472,7 @@ int main(int argc, char **argv)
   {
     if (!decided)
     {
-      print_msg("Unable to decide\n");
+      printf("Unable to decide\n");
       result = STREAM_IS_UNSURE;
     }
     else
@@ -499,28 +480,28 @@ int main(int argc, char **argv)
       switch (result)
       {
       case STREAM_IS_TS:
-        print_msg("It appears to be Transport Stream\n");
+        printf("It appears to be Transport Stream\n");
         break;
       case STREAM_IS_PS:
-        print_msg("It appears to be Program Stream\n");
+        printf("It appears to be Program Stream\n");
         break;
       case STREAM_IS_H262:
-        print_msg("It appears to be Elementary Stream, MPEG-2 (H.262)\n");
+        printf("It appears to be Elementary Stream, MPEG-2 (H.262)\n");
         break;
       case STREAM_IS_H264:
-        print_msg("It appears to be Elementary Stream, MPEG-4 (H.264)\n");
+        printf("It appears to be Elementary Stream, MPEG-4 (H.264)\n");
         break;
       case STREAM_IS_AVS:
-        print_msg("It appears to be Elementary Stream, AVS\n");
+        printf("It appears to be Elementary Stream, AVS\n");
         break;
       case STREAM_MAYBE_PES:
-        print_msg("It looks likely to be PES\n");
+        printf("It looks likely to be PES\n");
         break;
       case STREAM_IS_UNSURE:
-        print_msg("It is not recognised\n");
+        printf("It is not recognised\n");
         break;
       default:
-        fprint_msg("Unexpected decision value %d\n",result);
+        printf("Unexpected decision value %d\n",result);
         result = STREAM_IS_ERROR;
         break;
       }

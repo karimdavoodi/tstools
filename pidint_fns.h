@@ -229,11 +229,11 @@ extern int same_pmt(pmt_p  pmt1,
 /*
  * Report on a PMT datastructure.
  *
- * - if `is_msg`, report as a message, otherwise as an error
+ * - `stream` is the stream to write to
  * - `prefix` is NULL or a string to put before each line printed
  * - `pmt` is the PMT to report on
  */
-extern void report_pmt(int     is_msg,
+extern void report_pmt(FILE   *stream,
                        char   *prefix,
                        pmt_p   pmt);
 

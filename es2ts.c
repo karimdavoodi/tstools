@@ -42,7 +42,6 @@
 #include "ts_fns.h"
 #include "tswrite_fns.h"
 #include "misc_fns.h"
-#include "printing_fns.h"
 #include "version.h"
 
 
@@ -60,7 +59,7 @@ static int write_ES_unit_as_TS(TS_writer_p output,
                                       video_pid,DEFAULT_VIDEO_STREAM_ID);
   if (err)
   {
-    print_err("### Error writing ES data unit\n");
+    KLOG("### Error writing ES data unit\n");
     return err;
   }
   else
@@ -81,13 +80,13 @@ static int transfer_data(ES_p        es,
 
   // Write out a PAT and PMT first, or our stream won't make sense
   if (!quiet)
-    fprint_msg("Using transport stream id 1, PMT PID %#x, program 1 ="
-               " PID %#x, stream type %#x\n",pmt_pid,video_pid,
-               stream_type);
+    printf("Using transport stream id 1, PMT PID %#x, program 1 ="
+           " PID %#x, stream type %#x\n",pmt_pid,video_pid,
+           stream_type);
   err = write_TS_program_data(output,1,1,pmt_pid,video_pid,stream_type);
   if (err)
   {
-    print_err("### Error writing out TS program data\n");
+    KLOG("### Error writing out TS program data\n");
     return 1;
   }
 
@@ -100,19 +99,19 @@ static int transfer_data(ES_p        es,
       break;
     else if (err)
     {
-      print_err("### Error copying ES data units\n");
+      KLOG("### Error copying ES data units\n");
       return err;
     }
     count++;
 
     if (verbose)
-      report_ES_unit(FALSE,unit);
+      report_ES_unit(stderr,unit);
     
     err = write_ES_unit_as_TS(output,unit,video_pid);
     if (err)
     {
       free_ES_unit(&unit);
-      print_err("### Error copying ES data units\n");
+      KLOG("### Error copying ES data units\n");
       return err;
     }
 
@@ -122,17 +121,18 @@ static int transfer_data(ES_p        es,
       break;
   }
   if (!quiet)
-    fprint_msg("Transferred %d ES data unit%s\n",count,(count==1?"":"s"));
+    printf("Transferred %d ES data unit%s\n",count,(count==1?"":"s"));
   return 0;
 }
 
 static void print_usage()
 {
-  print_msg( "Usage: es2ts [switches] [<infile>] [<outfile>]\n"
-             "\n"
-           );
+  printf(
+    "Usage: es2ts [switches] [<infile>] [<outfile>]\n"
+    "\n"
+    );
   REPORT_VERSION("es2ts");
-  print_msg(
+  printf(
     "\n"
     "  Convert an elementary video stream to H.222 transport stream.\n"
     "  Supports input streams conforming to MPEG-2 (H.262), MPEG-4/AVC\n"
@@ -159,11 +159,9 @@ static void print_usage()
     "  -verbose, -v      Output summary information about each ES packet\n"
     "                    as it is read\n"
     "  -quiet, -q        Only output error messages\n"
-    "  -err stdout       Write error messages to standard output (the default)\n"
-    "  -err stderr       Write error messages to standard error (Unix traditional)\n"
     "  -stdin            Take input from <stdin>, instead of a named file\n"
     "  -stdout           Write output to <stdout>, instead of a named file\n"
-    "                    Forces -quiet and -err stderr.\n"
+    "                    Forces -quiet.\n"
     "  -host <host>, -host <host>:<port>\n"
     "                    Writes output (over TCP/IP) to the named <host>,\n"
     "                    instead of to a named file. If <port> is not\n"
@@ -256,23 +254,6 @@ int main(int argc, char **argv)
       {
         had_output_name = TRUE; // more or less
         use_stdout = TRUE;
-        redirect_output_stderr();
-      }
-      else if (!strcmp("-err",argv[ii]))
-      {
-        CHECKARG("es2ts",ii);
-        if (!strcmp(argv[ii+1],"stderr"))
-          redirect_output_stderr();
-        else if (!strcmp(argv[ii+1],"stdout"))
-          redirect_output_stdout();
-        else
-        {
-          fprint_err("### es2ts: "
-                     "Unrecognised option '%s' to -err (not 'stdout' or"
-                     " 'stderr')\n",argv[ii+1]);
-          return 1;
-        }
-        ii++;
       }
       else if (!strcmp("-host",argv[ii]))
       {
@@ -316,8 +297,8 @@ int main(int argc, char **argv)
       }
       else
       {
-        fprint_err("### es2ts: "
-                   "Unrecognised command line switch '%s'\n",argv[ii]);
+        KLOG("### es2ts: "
+                "Unrecognised command line switch '%s'\n",argv[ii]);
         return 1;
       }
     }
@@ -325,7 +306,7 @@ int main(int argc, char **argv)
     {
       if (had_input_name && had_output_name)
       {
-        fprint_err("### es2ts: Unexpected '%s'\n",argv[ii]);
+        KLOG("### es2ts: Unexpected '%s'\n",argv[ii]);
         return 1;
       }
       else if (had_input_name)
@@ -344,12 +325,12 @@ int main(int argc, char **argv)
   
   if (!had_input_name)
   {
-    print_err("### es2ts: No input file specified\n");
+    KLOG("### es2ts: No input file specified\n");
     return 1;
   }
   if (!had_output_name)
   {
-    print_err("### es2ts: No output file specified\n");
+    KLOG("### es2ts: No output file specified\n");
     return 1;
   }
 
@@ -366,18 +347,18 @@ int main(int argc, char **argv)
     err = open_elementary_stream(input_name,&es);
   if (err)
   {
-    print_err("### es2ts: "
-              "Problem starting elementary stream - abandoning reading\n");
+    KLOG("### es2ts: "
+            "Problem starting elementary stream - abandoning reading\n");
     return 1;
   }
 
   if (!quiet)
-    fprint_msg("Reading from  %s\n",(use_stdin?"<stdin>":input_name));
+    printf("Reading from  %s\n",(use_stdin?"<stdin>":input_name));
 
   // Decide if the input stream is H.262 or H.264
   if (force_stream_type || use_stdin)
   {
-    if (!quiet) print_msg("Reading input as ");
+    if (!quiet) printf("Reading input as ");
   }
   else
   {
@@ -385,30 +366,30 @@ int main(int argc, char **argv)
     err = decide_ES_file_video_type(es->input,FALSE,verbose,&video_type);
     if (err)
     {
-      print_err("### es2ts: Error deciding on stream type\n");
+      KLOG("### es2ts: Error deciding on stream type\n");
       close_elementary_stream(&es);
       return 1;
     }
-    if (!quiet) print_msg("Input appears to be ");
+    if (!quiet) printf("Input appears to be ");
   }
 
   switch (video_type)
   {
   case VIDEO_H262:
     stream_type = MPEG2_VIDEO_STREAM_TYPE;
-    if (!quiet) print_msg("MPEG-2 (H.262)\n");
+    if (!quiet) printf("MPEG-2 (H.262)\n");
     break;
   case VIDEO_H264:
     stream_type = AVC_VIDEO_STREAM_TYPE;
-    if (!quiet) print_msg("MPEG-4/AVC (H.264)\n");
+    if (!quiet) printf("MPEG-4/AVC (H.264)\n");
     break;
   case VIDEO_AVS:
     stream_type = AVS_VIDEO_STREAM_TYPE;
-    if (!quiet) print_msg("AVS\n");
+    if (!quiet) printf("AVS\n");
     break;
   case VIDEO_UNKNOWN:
-    if (!quiet) print_msg("Unknown\n");
-    print_err("### es2ts: Input video type is not recognised\n");
+    if (!quiet) printf("Unknown\n");
+    KLOG("### es2ts: Input video type is not recognised\n");
     close_elementary_stream(&es);
     return 1;
   }
@@ -423,23 +404,23 @@ int main(int argc, char **argv)
   if (err)
   {
     close_elementary_stream(&es);
-    fprint_err("### es2ts: Unable to open %s\n",output_name);
+    KLOG("### es2ts: Unable to open %s\n",output_name);
     return 1;
   }
 
   if (max && !quiet)
-    fprint_msg("Stopping after %d ES data units\n",max);
+    printf("Stopping after %d ES data units\n",max);
   
   err = transfer_data(es,output,pmt_pid,video_pid,stream_type,
                       max,verbose,quiet);
   if (err)
-    print_err("### es2ts: Error transferring data\n");
+    KLOG("### es2ts: Error transferring data\n");
 
   close_elementary_stream(&es);  // Closes the input file for us
   err2 = tswrite_close(output,quiet);
   if (err2)
   {
-    fprint_err("### es2ts: Error closing output %s: %s\n",output_name,
+    KLOG("### es2ts: Error closing output %s: %s\n",output_name,
             strerror(errno));
     return 1;
   }

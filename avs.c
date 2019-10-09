@@ -38,7 +38,6 @@
 #include <string.h>
 
 #include "compat.h"
-#include "printing_fns.h"
 #include "avs_fns.h"
 #include "es_fns.h"
 #include "ts_fns.h"
@@ -70,6 +69,21 @@ extern const char *avs_start_code_str(byte   start_code)
   }
 }
 
+/*
+ * Print out information derived from the start code, to the given stream.
+ */
+extern void print_avs_start_code_str(FILE  *stream,
+                                     byte   start_code)
+{
+  if (stream != NULL)
+  {
+    if (start_code < 0xB0)
+      fprintf(stream,"Slice %02x\n",start_code & 0xAF);
+    else
+      fprintf(stream,"%s",avs_start_code_str(start_code));
+  }
+}
+
 // ------------------------------------------------------------
 // AVS item *data* stuff
 // ------------------------------------------------------------
@@ -88,7 +102,7 @@ extern int build_avs_context(ES_p            es,
   avs_context_p  new = malloc(SIZEOF_AVS_CONTEXT);
   if (new == NULL)
   {
-    print_err("### Unable to allocate AVS context datastructure\n");
+    KLOG("### Unable to allocate AVS context datastructure\n");
     return 1;
   }
 
@@ -200,15 +214,15 @@ extern int avs_picture_coding_type(ES_unit_p  unit)
       return picture_coding_type;
     else
     {
-      fprint_err("AVS Picture coding type %d (in %02x)\n",
-                 picture_coding_type,unit->data[3]);
+      KLOG("AVS Picture coding type %d (in %02x)\n",
+              picture_coding_type,unit->data[3]);
       return 0;
     }
   }
   else
   {
-    fprint_err("AVS 'frame' with start code %02x does not have picture coding type\n",
-               unit->data[0]);
+    KLOG("AVS 'frame' with start code %02x does not have picture coding type\n",
+            unit->data[0]);
     return 0;
   }
 }
@@ -228,14 +242,14 @@ static int build_avs_frame(avs_context_p   context,
   avs_frame_p  new  = malloc(SIZEOF_AVS_FRAME);
   if (new == NULL)
   {
-    print_err("### Unable to allocate AVS frame datastructure\n");
+    KLOG("### Unable to allocate AVS frame datastructure\n");
     return 1;
   }
 
   err = build_ES_unit_list(&(new->list));
   if (err)
   {
-    print_err("### Unable to allocate internal list for AVS frame\n");
+    KLOG("### Unable to allocate internal list for AVS frame\n");
     free(new);
     return 1;
   }
@@ -262,8 +276,8 @@ static int build_avs_frame(avs_context_p   context,
     new->aspect_ratio = (data[10] & 0x3C) >> 2;
     new->frame_rate_code = ((data[10] & 0x03) << 2) | ((data[11] & 0xC0) >> 4);
 #if DEBUG
-    fprint_msg("aspect_ratio=%d, frame_rate_code=%d (%.2f)\n",new->aspect_ratio,
-               new->frame_rate_code,avs_frame_rate(new->frame_rate_code));
+    printf("aspect_ratio=%d, frame_rate_code=%d (%.2f)\n",new->aspect_ratio,
+           new->frame_rate_code,avs_frame_rate(new->frame_rate_code));
 #endif
   }
   else if (is_avs_seq_end_item(unit))
@@ -274,8 +288,9 @@ static int build_avs_frame(avs_context_p   context,
   }
   else
   {
-    fprint_err("!!! Building AVS frame that starts with a %s (%02x)\n",
-               avs_start_code_str(unit->start_code),unit->start_code);
+    KLOG(
+            "!!! Building AVS frame that starts with a %s (%02x)\n",
+            avs_start_code_str(unit->start_code),unit->start_code);
     new->is_frame = FALSE;
     new->is_sequence_header = FALSE;
     new->picture_coding_type = 0xFF;    // Meaningless value, just in case
@@ -284,8 +299,8 @@ static int build_avs_frame(avs_context_p   context,
   err = append_to_avs_frame(new,unit);
   if (err)
   {
-    fprint_err("### Error appending first ES unit to AVS %s\n",
-               avs_start_code_str(unit->start_code));
+    KLOG("### Error appending first ES unit to AVS %s\n",
+            avs_start_code_str(unit->start_code));
     free_avs_frame(&new);
     return 1;
   }
@@ -316,23 +331,94 @@ extern void free_avs_frame(avs_frame_p *frame)
   return;
 }
 
+#if 0
+/*
+ * Remember a frame for future reversing, if it's an I frame or a
+ * sequence header
+ *
+ * Returns 0 if it succeeds, 1 if some error occurs.
+ */
+static int maybe_remember_this_frame(avs_context_p  avs,
+                                     int            verbose,
+                                     avs_frame_p    this_frame)
+{
+  int        err;
+  ES_offset  start_posn = {0,0};
+  uint32_t   num_bytes = 0;
+  if (this_frame->is_frame)
+  {
+    if (this_frame->picture_coding_type == AVS_I_PICTURE_CODING)
+    {
+      // It's an I frame - we want to remember it in our reverse list
+      (avs->count_since_seq_hdr) ++;
+
+      err = get_ES_unit_list_bounds(this_frame->list,&start_posn,&num_bytes);
+      if (err)
+      {
+        KLOG(
+                "### Error working out position/size of AVS frame\n");
+        return 1;
+      }
+      
+      err = remember_reverse_avs_data(avs->reverse_data,avs->frame_index,
+                                      start_posn,num_bytes,
+                                      avs->count_since_seq_hdr,0);
+      if (err)
+      {
+        KLOG(
+                "### Error remembering reversing data for AVS item\n");
+        return 1;
+      }
+      if (verbose)
+        printf("REMEMBER I frame %5d at " OFFSET_T_FORMAT_08
+               "/%04d for %5d\n",avs->frame_index,
+               start_posn.infile,start_posn.inpacket,num_bytes);
+    }
+  }
+  else if (this_frame->is_sequence_header)
+  {
+    // It's a sequence header - remember it for the next frame
+    avs->count_since_seq_hdr = 0;
+    err = get_ES_unit_list_bounds(this_frame->list,&start_posn,&num_bytes);
+    if (err)
+    {
+      KLOG("### Error working out position/size of AVS"
+              " sequence header for reversing data\n");
+      return 1;
+    }
+    err = remember_reverse_avs_data(avs->reverse_data,0,
+                                     start_posn,num_bytes,0);
+    if (err)
+    {
+      KLOG("### Error remembering reversing data for AVS item\n");
+      return 1;
+    }
+    if (verbose)
+      printf("REMEMBER Sequence header at " OFFSET_T_FORMAT_08
+             "/%04d for %5d\n",
+             start_posn.infile,start_posn.inpacket,num_bytes);
+  }
+  return 0;
+}
+#endif
+
 #if DEBUG_GET_NEXT_PICTURE
 /*
  * Print a representation of an item for debugging
  */
 static void _show_item(ES_unit_p        unit)
 {
-  print_msg("__ ");
+  printf("__ ");
   if (unit == NULL)
   {
-    print_msg("<no ES unit>\n");
+    printf("<no ES unit>\n");
     return;
   }
   if (is_avs_frame_item(unit))
-    fprint_msg("%s frame",AVS_PICTURE_CODING_STR(avs_picture_coding_type(unit)));
+    printf("%s frame",AVS_PICTURE_CODING_STR(avs_picture_coding_type(unit)));
   else
-    fprint_msg("%s",avs_start_code_str(unit->start_code));
-  fprint_msg(" at " OFFSET_T_FORMAT "/%d for %d\n",
+    printf("%s",avs_start_code_str(unit->start_code));
+  printf(" at " OFFSET_T_FORMAT "/%d for %d\n",
          unit->start_posn.infile,unit->start_posn.inpacket,unit->data_len);
 }
 #endif
@@ -372,7 +458,7 @@ static int get_next_avs_single_frame(avs_context_p  context,
   int  num_slices = 0;
   int  had_slice = FALSE;
   int  last_slice_start_code = 0;
-  if (verbose && context->last_item) print_msg("__ reuse last item\n");
+  if (verbose && context->last_item) printf("__ reuse last item\n");
 #endif
 
   context->last_item = NULL;
@@ -410,7 +496,7 @@ static int get_next_avs_single_frame(avs_context_p  context,
 #if DEBUG_GET_NEXT_PICTURE
   if (verbose)
   {
-    print_msg("__ --------------------------------- <start frame>\n");
+    printf("__ --------------------------------- <start frame>\n");
     _show_item(item);
   }
 #endif
@@ -425,7 +511,7 @@ static int get_next_avs_single_frame(avs_context_p  context,
     // A sequence end is a single item, so we're done
 #if DEBUG_GET_NEXT_PICTURE
     if (verbose)
-      print_msg("__ --------------------------------- <end frame>\n");
+      printf("__ --------------------------------- <end frame>\n");
 #endif
     return 0;
   }
@@ -480,7 +566,7 @@ static int get_next_avs_single_frame(avs_context_p  context,
     err = append_to_avs_frame(*frame,item);
     if (err)
     {
-      print_err("### Error adding item to AVS sequence header\n");
+      KLOG("### Error adding item to AVS sequence header\n");
       free_avs_frame(frame);
       return 1;
     }
@@ -499,15 +585,15 @@ static int get_next_avs_single_frame(avs_context_p  context,
       if (num_slices > 1)
       {
         ES_unit_p  unit = &(*frame)->list->array[(*frame)->list->length-1];
-        print_msg("__ ...\n");
-        fprint_msg("__ slice %2x",last_slice_start_code);
-        fprint_msg(" at " OFFSET_T_FORMAT "/%d for %d\n",
-                   unit->start_posn.infile,unit->start_posn.inpacket,
-                   unit->data_len);
+        printf("__ ...\n");
+        printf("__ slice %2x",last_slice_start_code);
+        printf(" at " OFFSET_T_FORMAT "/%d for %d\n",
+               unit->start_posn.infile,unit->start_posn.inpacket,
+               unit->data_len);
       }
-      fprint_msg("__ (%2d slices)\n",num_slices);
+      printf("__ (%2d slices)\n",num_slices);
     }
-    print_msg("__ --------------------------------- <end frame>\n");
+    printf("__ --------------------------------- <end frame>\n");
     if (in_frame || in_sequence_header)
       _show_item(item);
   }
@@ -596,7 +682,7 @@ extern int write_avs_frame_as_TS(TS_writer_p     tswriter,
                                     DEFAULT_VIDEO_STREAM_ID);
     if (err)
     {
-      print_err("### Error writing out frame list to TS\n");
+      KLOG("### Error writing out frame list to TS\n");
       return err;
     }
   }
@@ -656,7 +742,7 @@ extern int write_avs_frame_as_TS_with_pts_dts(avs_frame_p          frame,
                                       video_pid,DEFAULT_VIDEO_STREAM_ID);
     if (err)
     {
-      print_err("### Error writing out frame list to TS\n");
+      KLOG("### Error writing out frame list to TS\n");
       return err;
     }
   }
@@ -707,7 +793,7 @@ extern int write_avs_frame_as_TS_with_PCR(avs_frame_p   frame,
                                       video_pid,DEFAULT_VIDEO_STREAM_ID);
     if (err)
     {
-      print_err("### Error writing out frame list to TS\n");
+      KLOG("### Error writing out frame list to TS\n");
       return err;
     }
   }
@@ -740,7 +826,7 @@ extern int write_avs_frame_as_ES(FILE        *output,
     err = write_ES_unit(output,unit);
     if (err)
     {
-      print_err("### Error writing out frame list to ES\n");
+      KLOG("### Error writing out frame list to ES\n");
       return err;
     }
   }
@@ -754,35 +840,36 @@ extern int write_avs_frame_as_ES(FILE        *output,
  * - `frame` is the frame to report on
  * - if `report_data`, then the component ES units will be printed out as well
  */
-extern void report_avs_frame(avs_frame_p  frame,
+extern void report_avs_frame(FILE        *stream,
+                             avs_frame_p  frame,
                              int          report_data)
 {
   if (frame->is_frame)
   {
-    fprint_msg("%s #%02d",
-               AVS_PICTURE_CODING_STR(frame->picture_coding_type),
-               frame->picture_distance);
-    print_msg("\n");
+    printf("%s #%02d",
+           AVS_PICTURE_CODING_STR(frame->picture_coding_type),
+           frame->picture_distance);
+    printf("\n");
   }
   else if (frame->is_sequence_header)
   {
-    print_msg("Sequence header: ");
-    fprint_msg(" frame rate %d (%.2f), aspect ratio %d (%s)",
-               frame->frame_rate_code,
-               avs_frame_rate(frame->frame_rate_code),
-               frame->aspect_ratio,
-               (frame->aspect_ratio==1?"SAR: 1.0":
-                frame->aspect_ratio==2?"4/3":
-                frame->aspect_ratio==3?"16/9":
-                frame->aspect_ratio==4?"2.21/1":"???"));
-    print_msg("\n");
+    printf("Sequence header: ");
+    printf(" frame rate %d (%.2f), aspect ratio %d (%s)",
+           frame->frame_rate_code,
+           avs_frame_rate(frame->frame_rate_code),
+           frame->aspect_ratio,
+           (frame->aspect_ratio==1?"SAR: 1.0":
+            frame->aspect_ratio==2?"4/3":
+            frame->aspect_ratio==3?"16/9":
+            frame->aspect_ratio==4?"2.21/1":"???"));
+    printf("\n");
   }
   else
   {
-    print_msg("Sequence end\n");
+    printf("Sequence end\n");
   }
   if (report_data)
-    report_ES_unit_list("ES units",frame->list);
+    report_ES_unit_list(stream,"ES units",frame->list);
 }
 
 // Local Variables:

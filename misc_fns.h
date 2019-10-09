@@ -53,15 +53,16 @@
 extern uint32_t crc32_block(uint32_t crc, byte *pData, int blk_len);
 
 /*
- * Print out the bottom N bits from a byte
+ * Print out the bottom N bits from a byte on the given stream
  */
-extern void print_bits(int     num_bits,
+extern void print_bits(FILE   *stream,
+                       int     num_bits,
                        byte    value);
 
 /*
  * Print out (the first `max`) bytes of a byte array.
  *
- * - if `is_msg` then print as a message, otherwise as an error
+ * - `stream` is the stream to print on.
  * - `name` is identifying text to start the report with.
  * - `data` is the byte data to print. This may be NULL.
  * - `length` is its length
@@ -74,14 +75,15 @@ extern void print_bits(int     num_bits,
  * where no more than `max` bytes are to be printed (and "..." is printed
  * if not all bytes were shown).
  */
-extern void print_data(int   is_msg,
-                       const char *name,
-                       const byte  data[],
+extern void print_data(FILE *stream,
+                       char *name,
+                       byte  data[],
                        int   length,
                        int   max);
 /*
  * Print out (the last `max`) bytes of a byte array.
  *
+ * - `stream` is the stream to print on.
  * - `name` is identifying text to start the report with.
  * - `data` is the byte data to print. This may be NULL.
  * - `length` is its length
@@ -94,7 +96,8 @@ extern void print_data(int   is_msg,
  * where no more than `max` bytes are to be printed (and "..." is printed
  * if not all bytes were shown).
  */
-extern void print_end_of_data(char *name,
+extern void print_end_of_data(FILE *stream,
+                              char *name,
                               byte  data[],
                               int   length,
                               int   max);
@@ -371,7 +374,7 @@ extern int host_value(char  *prefix,
  *
  * Returns 0 if it works, 1 if it fails.
  */
-extern int winsock_startup(void);
+extern int winsock_startup();
 /*
  * Convert a WinSock error number into a string and print it out on stderr
  */
@@ -436,9 +439,9 @@ static inline uint32_t uint_32_be(const uint8_t *const p)
 static inline uint32_t uint_32_le(const uint8_t *const p)
 {
   return (((int)p[0]&0xff) | 
-    (((int)p[1]&0xff) << 8) |
-    (((int)p[2]&0xff) << 16) |
-    (((int)p[3]&0xff) << 24));
+	  (((int)p[1]&0xff) << 8) | 
+	  (((int)p[2]&0xff) << 16) | 
+	  (((int)p[3]&0xff) << 24));
 }
 
 
@@ -453,52 +456,6 @@ static inline uint16_t uint_16_le(const uint8_t *const p)
   return (((int)p[0]&0xff) | 
 	  ((int)p[1]&0xff)<<8);
 }
-
-
-// ============================================================
-// Time diffs
-// ============================================================
-
-#define PCR_UNSIGNED_WRAP (300ULL * (1ULL << 33))
-
-// (x - y) with allowance for PCR wrap - unsigned version
-static inline uint64_t
-pcr_unsigned_diff(uint64_t x, uint64_t y)
-{
-  return x > y ? x - y :
-    300ULL * (1ULL << 33) - (y - x);
-}
-
-#define PCR_SIGNED_WRAP (300LL * (1LL << 33))
-#define PCR_SIGNED_MAX (PCR_SIGNED_WRAP / 2LL - 1LL)
-#define PCR_SIGNED_MIN (-PCR_SIGNED_WRAP / 2LL)
-
-// (x - y) with allowance for PCR wrap - signed version
-static inline int64_t
-pcr_signed_diff(uint64_t x, uint64_t y)
-{
-  int64_t r = x - y;
-
-  return r < PCR_SIGNED_MIN ? r + PCR_SIGNED_WRAP :
-    r > PCR_SIGNED_MAX ? r - PCR_SIGNED_WRAP :
-      r;
-}
-
-// Deal with simple overflow
-static inline uint64_t
-pcr_unsigned_wrap(uint64_t x)
-{
-  return x >= PCR_UNSIGNED_WRAP ? x - PCR_UNSIGNED_WRAP : x;
-}
-
-static inline int64_t
-pts_signed_diff(uint64_t x, uint64_t y)
-{
-  int64_t r = x - y;
-  return (r << 31) >> 31;
-}
-
-
 
 
 #endif // _misc_fns
